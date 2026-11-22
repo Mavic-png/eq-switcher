@@ -32,7 +32,22 @@ NAME_MAP = {
     "hd490pro-valorant.txt": "490 Pro 打瓦专用（脚步强化）",
     "hd490pro-valorant-hrtf.txt": "490 Pro 打瓦·HRTF 补偿版",
     "dt700.txt": "DT 700 Pro X 听歌",
+    "h6air-harman.txt": "H6 Air · Harman 目标（参数）",
+    "h6air-graphic.txt": "H6 Air · Harman 目标（图形）",
 }
+
+GROUP_ORDER = ["HD 490 PRO", "DT 700 Pro X", "Sony INZONE H6 Air", "其他"]
+
+
+def preset_group(fn):
+    low = fn.lower()
+    if low.startswith("hd490pro"):
+        return "HD 490 PRO"
+    if low.startswith("dt700"):
+        return "DT 700 Pro X"
+    if low.startswith("h6air"):
+        return "Sony INZONE H6 Air"
+    return "其他"
 
 # ---- RVC STUDIO 风格配色 ----
 BG = "#eef1f6"
@@ -295,6 +310,45 @@ class Card(tk.Frame):
         self.canvas.itemconfigure(self._win, width=w - 28, height=max(1, h - 24))
 
 
+class GroupHeader(tk.Canvas):
+    """设备分组标题：点击展开/收起。"""
+
+    def __init__(self, parent, title, count, expanded, command):
+        super().__init__(parent, bg=CARD, highlightthickness=0, bd=0,
+                         height=34, cursor="hand2")
+        self.title = title
+        self.count = count
+        self.expanded = expanded
+        self.command = command
+        self._hover = False
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.bind("<Button-1>", lambda e: self.command())
+
+    def _enter(self, _e):
+        self._hover = True
+        self._draw()
+
+    def _leave(self, _e):
+        self._hover = False
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        w = self.winfo_width() or 360
+        h = self.winfo_height() or 34
+        fill = HOVER if self._hover else CARD
+        rounded_rect(self, 1, 2, w - 1, h - 2, 8, fill=fill, outline=fill)
+        arrow = "▾" if self.expanded else "▸"
+        self.create_text(12, h / 2, text=arrow, anchor="w",
+                         fill=MUTED, font=(FONT, 8))
+        self.create_text(26, h / 2, text=self.title, anchor="w",
+                         fill=TEXT, font=(FONT, 9, "bold"))
+        self.create_text(w - 12, h / 2, text="%d" % self.count, anchor="e",
+                         fill=MUTED, font=(FONT, 8))
+
+
 class PresetRow(tk.Canvas):
     """圆角预设行：悬停高亮、当前项浅蓝底 + 左侧圆角竖条。"""
 
@@ -411,6 +465,7 @@ def parse_preset(path):
     """解析 Equalizer APO 预设，返回 (preamp, filters)。"""
     preamp = 0.0
     filters = []
+    graphic = []
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             for line in fh:
@@ -444,9 +499,18 @@ def parse_preset(path):
                         "g": float(gain.group(1)) if gain else 0.0,
                         "q": float(q.group(1)) if q else None,
                     })
+                elif low.startswith("graphiceq:"):
+                    body = s.split(":", 1)[1]
+                    for pair in body.split(";"):
+                        parts = pair.split()
+                        if len(parts) >= 2:
+                            try:
+                                graphic.append((float(parts[0]), float(parts[1])))
+                            except ValueError:
+                                pass
     except Exception:
         pass
-    return preamp, filters
+    return preamp, filters, graphic
 
 
 def _biquad_mag(ftype, f0, gain, q, fs=48000.0):
@@ -496,8 +560,9 @@ def _biquad_mag(ftype, f0, gain, q, fs=48000.0):
     return (b0, b1, b2, a0, a1, a2)
 
 
-def response_curve(preamp, filters, fs=48000.0, n=360):
+def response_curve(preamp, filters, graphic=None, fs=48000.0, n=360):
     freqs = [20 * (1000 ** (i / (n - 1))) for i in range(n)]
+    graphic = sorted(graphic or [])
     coefs = []
     for flt in filters:
         co = _biquad_mag(flt["type"], flt["f"], flt["g"], flt["q"], fs)
@@ -513,7 +578,20 @@ def response_curve(preamp, filters, fs=48000.0, n=360):
             den = a0 + a1 * z + a2 * z * z
             if abs(den) > 1e-12:
                 total *= abs(num) / abs(den)
-        dbs.append(20 * math.log10(max(total, 1e-9)))
+        db = 20 * math.log10(max(total, 1e-9))
+        if graphic:
+            gf, gd = zip(*graphic)
+            if f <= gf[0]:
+                db += gd[0]
+            elif f >= gf[-1]:
+                db += gd[-1]
+            else:
+                for i in range(len(gf) - 1):
+                    if gf[i] <= f <= gf[i + 1]:
+                        t0 = math.log(f / gf[i]) / math.log(gf[i + 1] / gf[i])
+                        db += gd[i] * (1 - t0) + gd[i + 1] * t0
+                        break
+        dbs.append(db)
     return freqs, dbs
 
 
@@ -633,7 +711,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.0", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.2", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -793,6 +871,16 @@ class App:
         else:
             self._list_vsb.pack(side="right", fill="y")
 
+    def _toggle_group(self, gname):
+        collapsed = set(self.ui_state.get("collapsed", []))
+        if gname in collapsed:
+            collapsed.discard(gname)
+        else:
+            collapsed.add(gname)
+        self.ui_state["collapsed"] = sorted(collapsed)
+        save_ui_state(self.ui_state)
+        self.build()
+
     def _preset_menu(self, fn, event):
         menu = tk.Menu(self.root, tearoff=0, bg=CARD, fg=TEXT,
                        activebackground=ACCENT_SOFT, activeforeground=ACCENT,
@@ -898,8 +986,11 @@ class App:
         include = self.read_active()
         if include:
             path = os.path.join(EQ_DIR, include)
-            preamp, filters = parse_preset(path) if os.path.isfile(path) else (0.0, [])
-            freqs, dbs = response_curve(preamp, filters)
+            if os.path.isfile(path):
+                preamp, filters, graphic = parse_preset(path)
+            else:
+                preamp, filters, graphic = 0.0, [], []
+            freqs, dbs = response_curve(preamp, filters, graphic)
             self._curve = (freqs, dbs)
             peak = max(dbs) if dbs else 0.0
             self.stat_peak.configure(text="峰值增益  %+.1f dB" % peak,
@@ -934,11 +1025,31 @@ class App:
             tk.Label(self.frame, text="F:\\int\\eq 下没有找到预设文件",
                      bg=CARD, fg=RED, font=(FONT, 10)).pack(anchor="w", padx=4)
         else:
+            groups = {}
             for fn in presets:
-                label = NAME_MAP.get(fn, fn)
-                PresetRow(self.frame, label, active == fn,
-                          lambda f=fn: self.apply(f), fn=fn,
-                          on_context=self._preset_menu).pack(fill="x", pady=1)
+                groups.setdefault(preset_group(fn), []).append(fn)
+            if "collapsed" not in self.ui_state:
+                self.ui_state["collapsed"] = sorted(groups)
+                save_ui_state(self.ui_state)
+            collapsed = set(self.ui_state.get("collapsed", []))
+            groups = {}
+            for fn in presets:
+                groups.setdefault(preset_group(fn), []).append(fn)
+            order = [g for g in GROUP_ORDER if g in groups]
+            order += [g for g in groups if g not in GROUP_ORDER]
+            for gname in order:
+                items = groups[gname]
+                expanded = gname not in collapsed
+                GroupHeader(self.frame, gname, len(items), expanded,
+                            lambda gg=gname: self._toggle_group(gg)).pack(
+                                fill="x", pady=(6, 0))
+                if expanded:
+                    for fn in items:
+                        label = NAME_MAP.get(fn, fn)
+                        PresetRow(self.frame, label, active == fn,
+                                  lambda f=fn: self.apply(f), fn=fn,
+                                  on_context=self._preset_menu).pack(
+                                      fill="x", padx=14, pady=1)
             if hidden:
                 tk.Label(self.frame, text="已隐藏 %d 个 · 点此恢复" % len(hidden),
                          bg=CARD, fg=MUTED, font=(FONT, 8),
