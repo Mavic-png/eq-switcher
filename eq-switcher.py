@@ -298,17 +298,25 @@ class Card(tk.Frame):
 class PresetRow(tk.Canvas):
     """圆角预设行：悬停高亮、当前项浅蓝底 + 左侧圆角竖条。"""
 
-    def __init__(self, parent, label, active, command):
+    def __init__(self, parent, label, active, command, fn="", on_context=None):
         super().__init__(parent, bg=CARD, highlightthickness=0, bd=0,
                          height=40, cursor="hand2")
         self.label = label
         self.active = active
         self.command = command
+        self.fn = fn
+        self.on_context = on_context
         self._hover = False
         self.bind("<Configure>", lambda e: self._draw())
         self.bind("<Enter>", self._enter)
         self.bind("<Leave>", self._leave)
         self.bind("<Button-1>", lambda e: self.command())
+        if on_context:
+            self.bind("<Button-3>", self._context)
+
+    def _context(self, event):
+        if self.on_context:
+            self.on_context(self.fn, event)
 
     def _enter(self, _e):
         if not self.active:
@@ -342,6 +350,38 @@ class PresetRow(tk.Canvas):
 
 
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_state.json")
+
+
+def _recycle(path):
+    """用 SHFileOperation 把文件移到回收站。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", ctypes.c_uint16),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", wintypes.LPVOID),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    FO_DELETE = 3
+    FOF_ALLOWUNDO = 0x0040
+    FOF_NOCONFIRMATION = 0x0010
+    FOF_SILENT = 0x0004
+    op = SHFILEOPSTRUCTW()
+    op.hwnd = None
+    op.wFunc = FO_DELETE
+    op.pFrom = path + "\0"
+    op.pTo = None
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
+    res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    if res != 0:
+        raise OSError("SHFileOperation 返回 %d" % res)
 
 
 def resource_path(name):
@@ -753,6 +793,52 @@ class App:
         else:
             self._list_vsb.pack(side="right", fill="y")
 
+    def _preset_menu(self, fn, event):
+        menu = tk.Menu(self.root, tearoff=0, bg=CARD, fg=TEXT,
+                       activebackground=ACCENT_SOFT, activeforeground=ACCENT,
+                       font=(FONT, 9), bd=0)
+        menu.add_command(label="隐藏此预设",
+                         command=lambda: self._hide_preset(fn))
+        menu.add_command(label="删除预设文件（回收站）",
+                         command=lambda: self._delete_preset(fn))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _hide_preset(self, fn):
+        hidden = self.ui_state.setdefault("hidden", [])
+        if fn not in hidden:
+            hidden.append(fn)
+            save_ui_state(self.ui_state)
+        self.build()
+
+    def _restore_hidden(self):
+        self.ui_state["hidden"] = []
+        save_ui_state(self.ui_state)
+        self.build()
+
+    def _delete_preset(self, fn):
+        path = os.path.join(EQ_DIR, fn)
+        if not os.path.isfile(path):
+            return
+        if not messagebox.askyesno(
+                "删除预设",
+                "把「%s」移到回收站？\n\n文件：%s" % (NAME_MAP.get(fn, fn), path)):
+            return
+        try:
+            _recycle(path)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("删除失败", str(exc))
+            return
+        hidden = self.ui_state.setdefault("hidden", [])
+        if fn in hidden:
+            hidden.remove(fn)
+            save_ui_state(self.ui_state)
+        if self.read_active() == fn and self.admin:
+            self.bypass()
+        self.build()
+
     def _on_wheel(self, event):
         try:
             widget = self.root.winfo_containing(event.x_root, event.y_root)
@@ -832,7 +918,8 @@ class App:
         for w in self.frame.winfo_children():
             w.destroy()
 
-        presets = discover()
+        hidden = set(self.ui_state.get("hidden", []))
+        presets = [fn for fn in discover() if fn not in hidden]
         active = self.read_active()
 
         if not self.admin:
@@ -850,7 +937,14 @@ class App:
             for fn in presets:
                 label = NAME_MAP.get(fn, fn)
                 PresetRow(self.frame, label, active == fn,
-                          lambda f=fn: self.apply(f)).pack(fill="x", pady=1)
+                          lambda f=fn: self.apply(f), fn=fn,
+                          on_context=self._preset_menu).pack(fill="x", pady=1)
+            if hidden:
+                tk.Label(self.frame, text="已隐藏 %d 个 · 点此恢复" % len(hidden),
+                         bg=CARD, fg=MUTED, font=(FONT, 8),
+                         cursor="hand2").pack(anchor="w", padx=12, pady=(8, 2))
+                self.frame.winfo_children()[-1].bind(
+                    "<Button-1>", lambda e: self._restore_hidden())
 
         self._update_status()
         self._update_analysis()
