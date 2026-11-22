@@ -15,10 +15,19 @@ import json
 import sys
 import time
 import tkinter as tk
+import webbrowser
 import winreg
 from tkinter import messagebox
 
+def base_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 EQ_DIR = r"F:\int\eq"
+if not os.path.isdir(EQ_DIR):
+    EQ_DIR = os.path.join(base_dir(), "presets")
 APO_DIR = r"C:\Program Files\EqualizerAPO\config"
 CFG = os.path.join(APO_DIR, "config.txt")
 
@@ -711,7 +720,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.2", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.3", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -1119,10 +1128,40 @@ class App:
         self.build()
 
 
+def find_installer():
+    for d in (os.path.join(base_dir(), "installer"), base_dir()):
+        if not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            low = name.lower()
+            if low.startswith("equalizerapo") and low.endswith(".exe"):
+                return os.path.join(d, name)
+    return None
+
+
 def main():
     if not os.path.isdir(APO_DIR):
-        ctypes.windll.user32.MessageBoxW(
-            0, "找不到 Equalizer APO 配置目录：\n" + APO_DIR, "EQ SWITCHER", 0x10)
+        inst = find_installer()
+        if inst:
+            ans = messagebox.askyesno(
+                "未安装 Equalizer APO",
+                "没有检测到 Equalizer APO。\n\n"
+                "找到一个安装包：\n%s\n\n是否现在运行安装程序？\n"
+                "（安装时勾选你的输出设备，完成后重启）" % inst)
+            if ans:
+                try:
+                    os.startfile(inst)
+                except Exception as exc:  # noqa: BLE001
+                    messagebox.showerror("启动安装失败", str(exc))
+        else:
+            ans = messagebox.askyesno(
+                "未安装 Equalizer APO",
+                "没有检测到 Equalizer APO。\n\n"
+                "是否打开官方下载页？\n"
+                "下载后放进安装程序所在的 installer 文件夹，"
+                "重新运行本程序即可自动引导安装。")
+            if ans:
+                webbrowser.open("https://sourceforge.net/projects/equalizerapo/files/")
         return 1
     root = tk.Tk()
     try:

@@ -1,0 +1,10 @@
+﻿# Sony INZONE H6 Air — Harman OE 2018
+# 来源: audio-guide.ykj13.ru (5 filters, preamp -3.7 dB)
+# 说明: 按测量结果生成的参数均衡，目标中性/哈曼
+
+Preamp: -3.7 dB
+Filter 1: ON PK Fc 32 Hz Gain 2.9 dB Q 0.56
+Filter 2: ON PK Fc 133 Hz Gain -4.2 dB Q 0.50
+Filter 3: ON PK Fc 1467 Hz Gain 4.0 dB Q 0.88
+Filter 4: ON PK Fc 2866 Hz Gain -1.4 dB Q 1.50
+Filter 5: ON PK Fc 7730 Hz Gain -0.7 dB Q 1.50
