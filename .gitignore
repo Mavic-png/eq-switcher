@@ -1,0 +1,6 @@
+__pycache__/
+build/
+dist/
+*.spec
+ui_state.json
+EQ???.old.exe
