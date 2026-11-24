@@ -17,7 +17,7 @@ import time
 import tkinter as tk
 import webbrowser
 import winreg
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 def base_dir():
     if getattr(sys, "frozen", False):
@@ -168,7 +168,7 @@ DARK = {
     "ACCENT_DARK": "#7aa2ff", "ACCENT_SOFT": "#1d2c4a",
     "GREEN": "#2fbf71", "RED": "#ff6b6b", "HOVER": "#222d3f",
     "ORANGE": "#f0a35e", "ORANGE_SOFT": "#3a2a1c",
-    "GRID": "#232d3d", "AXIS": "#3a475c",
+    "GRID": "#2f3d52", "AXIS": "#465a78",
     "DANGER_BG": "#3a1f22", "DANGER_HOVER": "#4a2428",
     "DANGER_BORDER": "#6b3a3f", "WHITE": "#ffffff",
 }
@@ -206,6 +206,34 @@ def rgb_to_hex(rgb):
 def lerp_hex(a, b, t):
     ra, rb = hex_to_rgb(a), hex_to_rgb(b)
     return rgb_to_hex(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
+
+
+def nearest_color_key(value):
+    try:
+        rgb = hex_to_rgb(str(value))
+    except Exception:
+        return None
+    best, best_d = None, 1e9
+    for key in LIGHT:
+        for pal in (LIGHT, DARK):
+            try:
+                prgb = hex_to_rgb(pal[key])
+            except Exception:
+                continue
+            d = ((rgb[0] - prgb[0]) ** 2 + (rgb[1] - prgb[1]) ** 2
+                 + (rgb[2] - prgb[2]) ** 2)
+            if d < best_d:
+                best, best_d = key, d
+    if best_d <= 110 * 110:
+        return best
+    return None
+
+
+def resolve_color_key(value, option):
+    text = str(value).upper()
+    if text == "#FFFFFF":
+        return "CARD" if "background" in option else "WHITE"
+    return COLOR_KEY.get(text)
 
 
 COLOR_KEY = {}
@@ -558,14 +586,14 @@ class ThemeSwitch(tk.Canvas):
         r = (h - 2) / 2
         rounded_rect(self, 1, 1, w - 1, h - 1, r, fill=CARD, outline=BORDER)
         if self.value:
-            rounded_rect(self, w / 2 - 8, 1, w - 1, h - 1, r,
-                         fill=ACCENT, outline=ACCENT)
+            rounded_rect(self, w / 2 - 8, 2, w - 2, h - 2, r - 1,
+                         fill=ACCENT_SOFT, outline=ACCENT_SOFT)
         else:
-            rounded_rect(self, 1, 1, w / 2 + 8, h - 1, r,
-                         fill=ACCENT, outline=ACCENT)
+            rounded_rect(self, 2, 2, w / 2 + 8, h - 2, r - 1,
+                         fill=ACCENT_SOFT, outline=ACCENT_SOFT)
         self.create_line(w / 2, 5, w / 2, h - 5, fill=BORDER)
-        sun_col = MUTED if self.value else "#ffffff"
-        moon_col = "#ffffff" if self.value else MUTED
+        sun_col = MUTED if self.value else ACCENT
+        moon_col = ACCENT if self.value else MUTED
         moon_bg = ACCENT if self.value else CARD
         # 太阳
         sx, sy = w * 0.25, cy
@@ -717,6 +745,63 @@ def resource_path(name):
     return path if os.path.exists(path) else None
 
 
+OPRA_URL = "http://opra.roonlabs.net/database_v1.jsonl"
+OPRA_CACHE = os.path.join(base_dir(), "opra_database_v1.jsonl")
+
+
+def load_opra_database(path=None):
+    path = path or OPRA_CACHE
+    vendors, products, eqs = {}, {}, {}
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            kind = obj.get("type")
+            data = obj.get("data") or {}
+            if kind == "vendor":
+                vendors[obj.get("id")] = data
+            elif kind == "product":
+                products[obj.get("id")] = data
+            elif kind == "eq":
+                pid = data.get("product_id")
+                eqs.setdefault(pid, []).append(data)
+    return vendors, products, eqs
+
+
+def download_opra_database():
+    import urllib.request
+    tmp = OPRA_CACHE + ".part"
+    urllib.request.urlretrieve(OPRA_URL, tmp)
+    os.replace(tmp, OPRA_CACHE)
+
+
+def opra_filter_line(index, band):
+    kind = {"low_shelf": "LS", "high_shelf": "HS",
+            "peak_dip": "PK", "peak": "PK"}.get(band.get("type"), "PK")
+    return ("Filter %d: ON %s Fc %g Hz Gain %g dB Q %g"
+            % (index, kind, float(band.get("frequency", 1000)),
+               float(band.get("gain_db", 0)), float(band.get("q", 1.0))))
+
+
+def opra_to_preset(eq):
+    params = eq.get("parameters") or {}
+    lines = ["Preamp: %g dB" % float(params.get("gain_db", 0))]
+    for i, band in enumerate(params.get("bands") or [], 1):
+        lines.append(opra_filter_line(i, band))
+    return "\n".join(lines) + "\n"
+
+
+def safe_preset_name(text, fallback="opra-preset"):
+    name = re.sub(r'[\\/:*?"<>|]', "_", text)
+    name = re.sub(r'\s+', "_", name).strip().strip("._")
+    return name or fallback
+
+
 def load_ui_state():
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as fh:
@@ -831,6 +916,22 @@ def _biquad_mag(ftype, f0, gain, q, fs=48000.0):
     else:
         return None
     return (b0, b1, b2, a0, a1, a2)
+
+
+def estimate_compensation(preamp, filters, graphic=None, target=0.0):
+    """按 100Hz–8kHz 平均响应估算补偿，并保证不因提升而削波。"""
+    try:
+        freqs, gains = response_curve(preamp, filters, graphic)
+        vals = [g for f, g in zip(freqs, gains) if 100.0 <= f <= 8000.0]
+        if not vals:
+            return 0.0
+        avg = sum(vals) / len(vals)
+        peak = max(gains)
+        comp = target - avg
+        comp = min(comp, -peak)  # 保证峰值不超过 0 dBFS
+        return max(-12.0, min(12.0, comp))
+    except Exception:
+        return 0.0
 
 
 def response_curve(preamp, filters, graphic=None, fs=48000.0, n=360):
@@ -956,6 +1057,680 @@ def read_config_state():
     return device, include
 
 
+class PeqEditor(tk.Toplevel):
+    """内置参数均衡编辑器：拖动频点改频率/增益，滚轮改 Q，实时曲线。"""
+
+    LEFT, RIGHT, TOP, BOTTOM = 46, 14, 16, 34
+    DB_RANGE = 12.0
+
+    def __init__(self, master, on_saved=None, app=None):
+        super().__init__(master)
+        self.on_saved = on_saved
+        self.app = app
+        self.previewing = False
+        self.restore_fn = None
+        self._preview_job = None
+        self.filters = []
+        self.selected = -1
+        self.preamp = 0.0
+        self.drag = None
+        self._cursor = None
+        self.title("PEQ 编辑器")
+        self.configure(bg=BG)
+        self.transient(master)
+        self.attributes("-topmost", True)
+        self.geometry("680x520+%d+%d" % (master.winfo_rootx() + 120,
+                                         master.winfo_rooty() + 90))
+
+        ctrl = tk.Frame(self, bg=BG)
+        ctrl.pack(fill="x", padx=14, pady=(12, 6))
+        self.preamp_var = tk.StringVar(value="0.0")
+        self.fc_var = tk.StringVar(value="1000")
+        self.gain_var = tk.StringVar(value="0.0")
+        self.q_var = tk.StringVar(value="1.0")
+        self.type_var = tk.StringVar(value="PK")
+
+        def field(label, var, w):
+            tk.Label(ctrl, text=label, bg=BG, fg=MUTED,
+                     font=(FONT, 9)).pack(side="left", padx=(6, 3))
+            e = tk.Entry(ctrl, textvariable=var, width=w, bg=CARD, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", font=(FONT, 9))
+            e.pack(side="left", ipady=3)
+            e.bind("<Return>", lambda ev: self.apply_fields())
+            e.bind("<FocusOut>", lambda ev: self.apply_fields())
+            return e
+
+        field("Preamp", self.preamp_var, 7)
+        tk.Label(ctrl, text=" 类型", bg=BG, fg=MUTED,
+                 font=(FONT, 9)).pack(side="left", padx=(8, 3))
+        menu = tk.OptionMenu(ctrl, self.type_var, "PK", "LS", "HS",
+                             command=lambda _v: self.apply_fields())
+        menu.configure(bg=CARD, fg=TEXT, activebackground=HOVER,
+                       relief="flat", highlightthickness=0,
+                       font=(FONT, 9), width=3)
+        menu["menu"].configure(bg=CARD, fg=TEXT)
+        menu.pack(side="left")
+
+        field("Fc", self.fc_var, 8)
+        field("Gain", self.gain_var, 7)
+        field("Q", self.q_var, 6)
+
+        self.canvas = tk.Canvas(self, bg=CARD, highlightthickness=0, bd=0,
+                                height=330)
+        self.canvas.pack(fill="both", expand=True, padx=14, pady=(4, 6))
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
+        self.canvas.bind("<Button-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", lambda e: setattr(self, "drag", None))
+        self.canvas.bind("<MouseWheel>", self.on_wheel)
+        self.canvas.bind("<Motion>", self.on_motion)
+        self.canvas.bind("<Leave>", lambda e: self._clear_cursor())
+
+        bottom = tk.Frame(self, bg=BG)
+        bottom.pack(fill="x", padx=14, pady=(0, 12))
+        self.preview_toggle = ToggleChip(bottom, "实时预览", value=False,
+                                         command=self._toggle_preview, width=88)
+        self.preview_toggle.pack(side="left", padx=(0, 8))
+        RoundedButton(bottom, "添加频点", self.add_band, kind="ghost",
+                      width=92, height=32).pack(side="left")
+        RoundedButton(bottom, "删除频点", self.del_band, kind="ghost",
+                      width=92, height=32).pack(side="left", padx=6)
+        RoundedButton(bottom, "保存为预设", self.save, kind="primary",
+                      width=104, height=32).pack(side="left", padx=(6, 0))
+        RoundedButton(bottom, "关闭", self._close, kind="ghost",
+                      width=72, height=32).pack(side="right")
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.status = tk.Label(self, text="拖动圆点改频率/增益；滚轮调 Q。",
+                               bg=BG, fg=MUTED, anchor="w", font=(FONT, 9))
+        self.status.pack(fill="x", padx=16, pady=(0, 8))
+
+        self.add_band()
+        self.after(80, lambda: set_dark_titlebar(
+            self, bool(getattr(self.app, "dark", PALETTE is DARK))))
+
+    # ---------- 坐标 ----------
+    def _plot_rect(self):
+        w = max(200, self.canvas.winfo_width())
+        h = max(160, self.canvas.winfo_height())
+        return (self.LEFT, self.TOP, w - self.RIGHT, h - self.BOTTOM)
+
+    def f_to_x(self, f):
+        left, top, right, bottom = self._plot_rect()
+        ratio = math.log(max(20.0, f) / 20.0) / math.log(20000.0 / 20.0)
+        return left + ratio * (right - left)
+
+    def x_to_f(self, x):
+        left, top, right, bottom = self._plot_rect()
+        ratio = (x - left) / max(1, right - left)
+        return 20.0 * (1000.0 ** max(0.0, min(1.0, ratio)))
+
+    def g_to_y(self, g):
+        left, top, right, bottom = self._plot_rect()
+        ratio = (self.DB_RANGE - max(-self.DB_RANGE, min(self.DB_RANGE, g))) / (2 * self.DB_RANGE)
+        return top + ratio * (bottom - top)
+
+    def y_to_g(self, y):
+        left, top, right, bottom = self._plot_rect()
+        ratio = (y - top) / max(1, bottom - top)
+        return self.DB_RANGE - max(0.0, min(1.0, ratio)) * 2 * self.DB_RANGE
+
+    # ---------- 绘制 ----------
+    def redraw(self):
+        c = self.canvas
+        try:
+            c.configure(bg=CARD)
+        except Exception:
+            pass
+        c.delete("all")
+        left, top, right, bottom = self._plot_rect()
+        c.create_rectangle(left, top, right, bottom, outline=BORDER, tags="border")
+        for f in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
+            x = self.f_to_x(f)
+            c.create_line(x, top, x, bottom, fill=GRID, tags="grid")
+            label = ("%gk" % (f / 1000.0)) if f >= 1000 else str(f)
+            c.create_text(x, bottom + 12, text=label, fill=MUTED,
+                          font=(FONT, 8), tags="gridtext")
+        for db in range(-12, 13, 3):
+            y = self.g_to_y(db)
+            c.create_line(left, y, right, y, fill=GRID, tags="grid")
+            c.create_text(left - 18, y, text="%+d" % db, fill=MUTED,
+                          font=(FONT, 8), tags="gridtext")
+        c.create_line(left, self.g_to_y(0), right, self.g_to_y(0),
+                      fill=AXIS, tags="axis")
+        freqs, gains = response_curve(self.preamp, self.filters)
+        pts = []
+        for f, g in zip(freqs, gains):
+            pts.extend((self.f_to_x(f), self.g_to_y(g)))
+        if len(pts) >= 4:
+            c.create_line(*pts, fill=ACCENT, width=2, tags="curve")
+        for i, flt in enumerate(self.filters):
+            x = self.f_to_x(flt["f"])
+            y = self.g_to_y(flt["g"])
+            r = 6 if i == self.selected else 5
+            c.create_oval(x - r, y - r, x + r, y + r,
+                          fill=ACCENT, outline=RED if i == self.selected else CARD,
+                          width=2 if i == self.selected else 1, tags="point")
+            c.create_text(x, y - 12, text=str(i + 1), fill=TEXT,
+                          font=(FONT, 8, "bold"), tags="pointtext")
+        self._draw_cursor()
+        self.update_fields()
+
+    def theme_frame(self):
+        try:
+            self.canvas.configure(bg=CARD)
+            self.canvas.itemconfigure("border", outline=BORDER)
+            self.canvas.itemconfigure("grid", fill=GRID)
+            self.canvas.itemconfigure("gridtext", fill=MUTED)
+            self.canvas.itemconfigure("axis", fill=AXIS)
+            self.canvas.itemconfigure("curve", fill=ACCENT)
+            self.canvas.itemconfigure("point", fill=ACCENT)
+            self.canvas.itemconfigure("pointtext", fill=TEXT)
+            if 0 <= self.selected < len(self.filters):
+                flt = self.filters[self.selected]
+                x, y = self.f_to_x(flt["f"]), self.g_to_y(flt["g"])
+                for item in self.canvas.find_withtag("point"):
+                    coords = self.canvas.coords(item)
+                    if coords and abs((coords[0] + coords[2]) / 2 - x) < 2:
+                        self.canvas.itemconfigure(item, outline=RED)
+        except Exception:
+            pass
+
+    def _draw(self):
+        self.redraw()
+
+    def update_fields(self):
+        if 0 <= self.selected < len(self.filters):
+            f = self.filters[self.selected]
+            self.type_var.set(f["type"])
+            self.fc_var.set("%.0f" % f["f"])
+            self.gain_var.set("%.1f" % f["g"])
+            self.q_var.set("%.2f" % f["q"])
+        self.preamp_var.set("%.1f" % self.preamp)
+
+    # ---------- 交互 ----------
+    def on_press(self, event):
+        best, best_d = -1, 14.0
+        for i, flt in enumerate(self.filters):
+            dx = self.f_to_x(flt["f"]) - event.x
+            dy = self.g_to_y(flt["g"]) - event.y
+            d = math.hypot(dx, dy)
+            if d < best_d:
+                best, best_d = i, d
+        self.selected = best
+        self.drag = best if best >= 0 else None
+        self.redraw()
+
+    def on_drag(self, event):
+        if self.drag is None or not (0 <= self.drag < len(self.filters)):
+            return
+        flt = self.filters[self.drag]
+        flt["f"] = max(20.0, min(20000.0, self.x_to_f(event.x)))
+        flt["g"] = max(-12.0, min(12.0, self.y_to_g(event.y)))
+        self.redraw()
+        self._schedule_preview()
+
+    def on_wheel(self, event):
+        if not (0 <= self.selected < len(self.filters)):
+            return
+        flt = self.filters[self.selected]
+        factor = 1.12 if event.delta > 0 else 1 / 1.12
+        flt["q"] = max(0.1, min(20.0, flt["q"] * factor))
+        self.redraw()
+        self._schedule_preview()
+
+    def apply_fields(self):
+        try:
+            self.preamp = float(self.preamp_var.get())
+        except ValueError:
+            pass
+        if 0 <= self.selected < len(self.filters):
+            flt = self.filters[self.selected]
+            flt["type"] = self.type_var.get() or "PK"
+            try:
+                flt["f"] = max(20.0, min(20000.0, float(self.fc_var.get())))
+                flt["g"] = max(-12.0, min(12.0, float(self.gain_var.get())))
+                flt["q"] = max(0.1, min(20.0, float(self.q_var.get())))
+            except ValueError:
+                pass
+        self.redraw()
+        self._schedule_preview()
+
+    def _fmt_freq(self, f):
+        if f >= 1000.0:
+            return "%.2f kHz" % (f / 1000.0)
+        return "%.0f Hz" % f
+
+    def _draw_cursor(self):
+        c = self.canvas
+        c.delete("cursor")
+        if not self._cursor:
+            return
+        left, top, right, bottom = self._plot_rect()
+        x, y = self._cursor
+        if not (left <= x <= right and top <= y <= bottom):
+            return
+        c.create_line(x, top, x, bottom, fill=AXIS, dash=(2, 4), tags="cursor")
+        c.create_line(left, y, right, y, fill=AXIS, dash=(2, 4), tags="cursor")
+        label = "%s   %+.1f dB" % (self._fmt_freq(self.x_to_f(x)),
+                                    self.y_to_g(y))
+        tx = x + 10 if x < right - 110 else x - 10
+        anchor = "nw" if x < right - 110 else "ne"
+        c.create_text(tx, top + 8, text=label, fill=TEXT, anchor=anchor,
+                      font=(FONT, 8, "bold"), tags="cursor")
+
+    def _clear_cursor(self):
+        self._cursor = None
+        self.canvas.delete("cursor")
+
+    def on_motion(self, event):
+        self._cursor = (event.x, event.y)
+        self._draw_cursor()
+
+    def _next_band_frequency(self):
+        if not self.filters:
+            return 1000.0
+        order = [1000.0, 100.0, 10000.0, 250.0, 3000.0, 40.0, 6000.0,
+                 160.0, 2000.0, 500.0, 8000.0, 63.0, 400.0, 5000.0,
+                 12000.0, 30.0, 15000.0]
+        used = [flt["f"] for flt in self.filters]
+
+        def distance(f):
+            return min(abs(math.log(f / u)) for u in used)
+
+        for f in order:
+            if distance(f) > 0.22:
+                return f
+        candidates = [30.0 * (533.33 ** (i / 24.0)) for i in range(25)]
+        return float(max(candidates, key=distance))
+
+    def add_band(self):
+        self.filters.append({"type": "PK", "f": self._next_band_frequency(),
+                             "g": 0.0, "q": 1.0})
+        self.selected = len(self.filters) - 1
+        self.redraw()
+        self._schedule_preview()
+
+    def del_band(self):
+        if 0 <= self.selected < len(self.filters):
+            self.filters.pop(self.selected)
+            self.selected = min(self.selected, len(self.filters) - 1)
+            self.redraw()
+            self._schedule_preview()
+
+    def _serialize(self):
+        lines = ["Preamp: %.1f dB" % self.preamp]
+        for i, flt in enumerate(self.filters, 1):
+            lines.append("Filter %d: ON %s Fc %.0f Hz Gain %.1f dB Q %.2f"
+                         % (i, flt["type"], flt["f"], flt["g"], flt["q"]))
+        return "\n".join(lines) + "\n"
+
+    def _toggle_preview(self):
+        if self.preview_toggle.get():
+            if not self.app or not getattr(self.app, "admin", False):
+                messagebox.showwarning("需要管理员权限",
+                                       "实时预览需要管理员权限，请点「以管理员重启」。",
+                                       parent=self)
+                self.preview_toggle.value = False
+                self.preview_toggle._draw()
+                return
+            self.restore_fn = getattr(self.app, "active_fn", None)
+            self.previewing = True
+            self._push_preview()
+        else:
+            self.previewing = False
+            self._restore()
+
+    def _schedule_preview(self):
+        if not self.previewing:
+            return
+        try:
+            if self._preview_job:
+                self.after_cancel(self._preview_job)
+        except Exception:
+            pass
+        self._preview_job = self.after(120, self._push_preview)
+
+    def _push_preview(self):
+        self._preview_job = None
+        if not self.previewing or not self.app:
+            return
+        ok = self.app.preview_preset(self._serialize())
+        if not ok:
+            self.previewing = False
+            self.preview_toggle.value = False
+            self.preview_toggle._draw()
+
+    def _restore(self):
+        if not self.app:
+            return
+        try:
+            if self.restore_fn:
+                self.app.apply(self.restore_fn)
+            else:
+                self.app.bypass()
+        except Exception:
+            pass
+
+    def _close(self):
+        self.previewing = False
+        self._restore()
+        self.destroy()
+
+    def _ask_name(self):
+        top = tk.Toplevel(self)
+        top.title("保存预设")
+        top.configure(bg=BG)
+        top.transient(self)
+        top.attributes("-topmost", True)
+        top.resizable(False, False)
+        w, h = 380, 190
+        x = self.winfo_rootx() + (self.winfo_width() - w) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - h) // 2
+        top.geometry("%dx%d+%d+%d" % (w, h, x, y))
+
+        tk.Label(top, text="预设名称", bg=BG, fg=TEXT,
+                 font=(FONT, 11, "bold")).pack(anchor="w", padx=20, pady=(18, 6))
+        entry = tk.Entry(top, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                         relief="flat", font=(FONT, 11),
+                         highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=ACCENT)
+        entry.pack(fill="x", padx=20, ipady=6)
+        entry.insert(0, "peq")
+        entry.select_range(0, "end")
+        hint = tk.Label(top, text="保存到：%s" % EQ_DIR, bg=BG, fg=MUTED,
+                        font=(FONT, 8), anchor="w")
+        hint.pack(fill="x", padx=20, pady=(6, 0))
+
+        result = {"value": None}
+
+        def submit(_e=None):
+            name = entry.get().strip()
+            if not name:
+                return
+            result["value"] = name
+            top.destroy()
+
+        def cancel(_e=None):
+            top.destroy()
+
+        row = tk.Frame(top, bg=BG)
+        row.pack(fill="x", padx=20, pady=(16, 16))
+        RoundedButton(row, "保存", submit, kind="primary",
+                      width=96, height=34).pack(side="right")
+        RoundedButton(row, "取消", cancel, kind="ghost",
+                      width=80, height=34).pack(side="right", padx=(0, 8))
+        entry.bind("<Return>", submit)
+        top.bind("<Escape>", cancel)
+        entry.focus_set()
+        top.grab_set()
+        self.wait_window(top)
+        return result["value"]
+
+    def save(self):
+        name = self._ask_name()
+        if not name:
+            return
+        text = self._serialize()
+        os.makedirs(EQ_DIR, exist_ok=True)
+        filename = safe_preset_name(name, "peq") + ".txt"
+        path = os.path.join(EQ_DIR, filename)
+        if os.path.exists(path):
+            base, ext = os.path.splitext(filename)
+            n = 2
+            while os.path.exists(os.path.join(EQ_DIR, "%s-%d%s" % (base, n, ext))):
+                n += 1
+            filename = "%s-%d%s" % (base, n, ext)
+            path = os.path.join(EQ_DIR, filename)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as exc:
+            self.status.configure(text="保存失败：%s" % exc, fg=RED)
+            return
+        self.status.configure(text="已保存：%s" % filename, fg=GREEN)
+        if self.previewing:
+            self.previewing = False
+            self._restore()
+            if self.app and getattr(self.app, "admin", False):
+                try:
+                    self.app.apply(filename)
+                except Exception:
+                    pass
+        if self.on_saved:
+            try:
+                self.on_saved()
+            except Exception:
+                pass
+
+
+class OpraBrowser(tk.Toplevel):
+    """从 OPRA 数据库搜索耳机并生成 Equalizer APO 预设。"""
+
+    def __init__(self, master, on_import=None):
+        super().__init__(master)
+        self.on_import = on_import
+        self.title("耳机库 · OPRA")
+        self.configure(bg=BG)
+        self.geometry("620x480+%d+%d" % (master.winfo_rootx() + 160,
+                                         master.winfo_rooty() + 120))
+        self.transient(master)
+        self.attributes("-topmost", True)
+        self.vendors = {}
+        self.products = {}
+        self.eqs = {}
+        self.matches = []
+
+        top = tk.Frame(self, bg=BG)
+        top.pack(fill="x", padx=16, pady=(14, 8))
+        self.entry = tk.Entry(top, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                              relief="flat", font=(FONT, 10))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=5)
+        self.entry.bind("<Return>", lambda e: self.search())
+        RoundedButton(top, "搜索", self.search, kind="primary",
+                      width=72, height=32).pack(side="left", padx=(8, 0))
+        RoundedButton(top, "刷新库", self.refresh_db, kind="ghost",
+                      width=76, height=32).pack(side="left", padx=(6, 0))
+
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True, padx=16)
+        self.listbox = tk.Listbox(body, bg=CARD, fg=TEXT, selectbackground=ACCENT,
+                                  selectforeground="#ffffff", relief="flat",
+                                  highlightthickness=0, font=(FONT, 10),
+                                  activestyle="none")
+        self.listbox.pack(side="left", fill="both", expand=True)
+        scroll = tk.Scrollbar(body, command=self.listbox.yview)
+        scroll.pack(side="left", fill="y")
+        self.listbox.configure(yscrollcommand=scroll.set)
+        self.listbox.bind("<<ListboxSelect>>", lambda e: self.show_detail())
+        self.listbox.bind("<Double-Button-1>", lambda e: self.import_selected())
+
+        self.detail = tk.Label(self, text="", bg=BG, fg=MUTED, anchor="w",
+                               justify="left", font=(FONT, 9))
+        self.detail.pack(fill="x", padx=16, pady=(8, 4))
+        self.status = tk.Label(self, text="", bg=BG, fg=ACCENT, anchor="w",
+                               font=(FONT, 9))
+        self.status.pack(fill="x", padx=16)
+
+        bottom = tk.Frame(self, bg=BG)
+        bottom.pack(fill="x", padx=16, pady=12)
+        RoundedButton(bottom, "导入为预设", self.import_selected,
+                      kind="primary", width=108, height=34).pack(side="left")
+        RoundedButton(bottom, "关闭", self.destroy, kind="ghost",
+                      width=80, height=34).pack(side="right")
+
+        self.after(60, self.start)
+        self.after(90, lambda: set_dark_titlebar(self, PALETTE is DARK))
+
+    def start(self):
+        if not os.path.exists(OPRA_CACHE):
+            if not messagebox.askyesno(
+                    "下载耳机库",
+                    "首次使用需要下载 OPRA 数据库（约 12 MB）。\n\n"
+                    "下载后保存在程序目录，之后可离线使用。\n现在下载吗？",
+                    parent=self):
+                self.status.configure(text="未下载数据库，无法搜索。")
+                return
+            self.status.configure(text="正在下载数据库…")
+            self.update_idletasks()
+            try:
+                download_opra_database()
+            except Exception as exc:  # noqa: BLE001
+                self.status.configure(text="下载失败：%s" % exc)
+                return
+        self.reload()
+
+    def reload(self):
+        try:
+            self.vendors, self.products, self.eqs = load_opra_database()
+        except Exception as exc:  # noqa: BLE001
+            self.status.configure(text="读取失败：%s" % exc)
+            return
+        self.status.configure(
+            text="共 %d 个型号，%d 条 EQ。输入型号后回车搜索。"
+                 % (len(self.products), sum(len(v) for v in self.eqs.values())))
+        self.search()
+
+    def refresh_db(self):
+        if not messagebox.askyesno("刷新耳机库", "重新下载 OPRA 数据库？", parent=self):
+            return
+        self.status.configure(text="正在下载数据库…")
+        self.update_idletasks()
+        try:
+            download_opra_database()
+        except Exception as exc:  # noqa: BLE001
+            self.status.configure(text="下载失败：%s" % exc)
+            return
+        self.reload()
+
+    def _vendor_name(self, vendor_id):
+        return (self.vendors.get(vendor_id) or {}).get("name", vendor_id or "")
+
+    def _local_presets(self, tokens):
+        rows = []
+        seen = set()
+        dirs = [EQ_DIR]
+        bundled = _bundled_dir("presets")
+        if bundled and os.path.abspath(bundled) != os.path.abspath(EQ_DIR):
+            dirs.append(bundled)
+        for folder in dirs:
+            try:
+                names = sorted(os.listdir(folder))
+            except OSError:
+                continue
+            for name in names:
+                if not name.lower().endswith(".txt") or name in seen:
+                    continue
+                label = NAME_MAP.get(name, os.path.splitext(name)[0])
+                haystack = (label + " " + name).lower()
+                if tokens and not all(tok in haystack for tok in tokens):
+                    continue
+                seen.add(name)
+                rows.append((folder, name, label))
+        return rows
+
+    def search(self):
+        query = self.entry.get().strip().lower()
+        self.listbox.delete(0, "end")
+        self.matches = []
+        self.local_rows = []
+        tokens = [x for x in query.split() if x]
+        for pid, product in self.products.items():
+            name = product.get("name", "")
+            vendor = self._vendor_name(product.get("vendor_id"))
+            haystack = ("%s %s" % (vendor, name)).lower()
+            if tokens and not all(tok in haystack for tok in tokens):
+                continue
+            if pid not in self.eqs:
+                continue
+            self.matches.append((pid, vendor, name, len(self.eqs[pid])))
+        self.matches.sort(key=lambda x: (x[1].lower(), x[2].lower()))
+        for pid, vendor, name, count in self.matches:
+            self.listbox.insert("end", "%s · %s  (%d)" % (vendor, name, count))
+        self.local_rows = self._local_presets(tokens)
+        for folder, name, label in self.local_rows:
+            self.listbox.insert("end", "[本地] %s" % label)
+        total = len(self.matches) + len(self.local_rows)
+        self.status.configure(
+            text="找到 %d 个在线型号，%d 个本地预设。" % (len(self.matches), len(self.local_rows)))
+        if total:
+            self.listbox.selection_set(0)
+            self.show_detail()
+
+    def _selected(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return None
+        idx = sel[0]
+        if idx < len(self.matches):
+            return ("opra", self.matches[idx])
+        local_idx = idx - len(self.matches)
+        if 0 <= local_idx < len(self.local_rows):
+            return ("local", self.local_rows[local_idx])
+        return None
+
+    def show_detail(self):
+        item = self._selected()
+        if not item:
+            return
+        kind, data = item
+        if kind == "opra":
+            pid, vendor, name, count = data
+            eqs = self.eqs.get(pid) or []
+            authors = ", ".join(sorted({(e.get("author") or "?") for e in eqs}))
+            self.detail.configure(text="%s · %s\nEQ 来源：%s" % (vendor, name, authors))
+        else:
+            folder, name, label = data
+            self.detail.configure(text="本地预设：%s\n位置：%s" % (label, folder))
+
+    def import_selected(self):
+        item = self._selected()
+        if not item:
+            self.status.configure(text="先选一个型号。")
+            return
+        kind, data = item
+        if kind == "local":
+            folder, name, label = data
+            src = os.path.join(folder, name)
+            dst = os.path.join(EQ_DIR, name)
+            try:
+                os.makedirs(EQ_DIR, exist_ok=True)
+                if os.path.abspath(src) != os.path.abspath(dst) and not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+                self.status.configure(text="本地预设已在列表：%s" % name)
+            except OSError as exc:
+                self.status.configure(text="导入失败：%s" % exc)
+                return
+            if self.on_import:
+                self.on_import()
+            return
+        pid, vendor, name, count = data
+        eqs = self.eqs.get(pid) or []
+        eq = next((e for e in eqs if "autoeq" in (e.get("author") or "").lower()),
+                  eqs[0])
+        text = opra_to_preset(eq)
+        filename = safe_preset_name("opra-%s-%s" % (vendor, name), "opra-preset") + ".txt"
+        os.makedirs(EQ_DIR, exist_ok=True)
+        path = os.path.join(EQ_DIR, filename)
+        if os.path.exists(path):
+            base, ext = os.path.splitext(filename)
+            n = 2
+            while os.path.exists(os.path.join(EQ_DIR, "%s-%d%s" % (base, n, ext))):
+                n += 1
+            filename = "%s-%d%s" % (base, n, ext)
+            path = os.path.join(EQ_DIR, filename)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as exc:
+            self.status.configure(text="写入失败：%s" % exc)
+            return
+        self.status.configure(text="已导入：%s" % filename)
+        if self.on_import:
+            try:
+                self.on_import()
+            except Exception:
+                pass
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -977,7 +1752,10 @@ class App:
         apply_palette(self.dark)
         root.configure(bg=BG)
         set_dark_titlebar(root, self.dark)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.pinned = bool(self.ui_state.get("topmost", True))
+        self.active_fn = None
+        self.volume_match = bool(self.ui_state.get("volume_match", True))
         root.attributes("-topmost", self.pinned)
 
         self._build_ui()
@@ -1001,7 +1779,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.9", bg=BG, fg=MUTED,
+        tk.Label(right, text="v2.0", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -1091,8 +1869,16 @@ class App:
 
         bottom = tk.Frame(root, bg=BG)
         bottom.pack(fill="x", padx=20, pady=(4, 8))
-        RoundedButton(bottom, "添加预设", self.add_presets, kind="ghost",
+        self.volume_toggle = ToggleChip(
+            bottom, "音量匹配", value=self.volume_match,
+            command=self._toggle_volume_match, width=88)
+        self.volume_toggle.pack(side="left", padx=(0, 8))
+        RoundedButton(bottom, "PEQ 编辑器", self.open_peq, kind="ghost",
+                      width=104).pack(side="left", padx=(0, 8))
+        RoundedButton(bottom, "耳机库", self.open_opra, kind="ghost",
                       width=96).pack(side="left")
+        RoundedButton(bottom, "添加预设", self.add_presets, kind="ghost",
+                      width=96).pack(side="left", padx=8)
         RoundedButton(bottom, "刷新列表", self.build, kind="ghost",
                       width=96).pack(side="left", padx=8)
         RoundedButton(bottom, "关闭 EQ", self.bypass, kind="danger",
@@ -1132,6 +1918,10 @@ class App:
         self.ui_state["theme"] = "dark" if dark else "light"
         save_ui_state(self.ui_state)
         self.dark = dark
+        set_dark_titlebar(self.root, dark)
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel):
+                set_dark_titlebar(w, dark)
         self._animate_theme(DARK if dark else LIGHT)
 
     def _collect_theme_targets(self):
@@ -1141,6 +1931,7 @@ class App:
         roles = []
         canvases = []
         cards = []
+        dialogs = []
 
         def collect(widget):
             try:
@@ -1148,6 +1939,8 @@ class App:
             except Exception:
                 return
             for child in children:
+                if isinstance(child, tk.Toplevel) and hasattr(child, "theme_frame"):
+                    dialogs.append(child)
                 for opt in opts:
                     try:
                         value = child.cget(opt)
@@ -1155,7 +1948,7 @@ class App:
                         continue
                     if not value:
                         continue
-                    key = COLOR_KEY.get(str(value).upper())
+                    key = resolve_color_key(value, opt)
                     if key:
                         roles.append((child, opt, key))
                 if isinstance(child, tk.Canvas):
@@ -1168,25 +1961,97 @@ class App:
         self._theme_roles = roles
         self._theme_canvases = canvases
         self._theme_cards = cards
+        self._theme_dialogs = dialogs
 
-    def _animate_theme(self, target):
+    def _apply_palette_to_widgets(self, target):
+        opts = ("background", "foreground", "activebackground",
+                "activeforeground", "selectbackground", "selectforeground",
+                "highlightbackground", "highlightcolor", "insertbackground")
+
+        def walk(widget):
+            try:
+                children = widget.winfo_children()
+            except Exception:
+                return
+            for child in children:
+                for opt in opts:
+                    try:
+                        value = child.cget(opt)
+                    except Exception:
+                        continue
+                    if not value:
+                        continue
+                    key = resolve_color_key(value, opt)
+                    if key and key in target:
+                        try:
+                            child.configure(**{opt: target[key]})
+                        except Exception:
+                            pass
+                walk(child)
+
+        walk(self.root)
+
+    def _redraw_all_canvases(self):
+        def walk(widget):
+            try:
+                children = widget.winfo_children()
+            except Exception:
+                return
+            for child in children:
+                if isinstance(child, tk.Toplevel) and hasattr(child, "_draw"):
+                    try:
+                        child._draw()
+                    except Exception:
+                        pass
+                if isinstance(child, tk.Canvas):
+                    drawable = hasattr(child, "_draw") or hasattr(child, "_redraw")
+                    if drawable:
+                        try:
+                            child.configure(bg=child.master.cget("background"))
+                        except Exception:
+                            pass
+                        try:
+                            if hasattr(child, "_draw"):
+                                child._draw()
+                            elif hasattr(child, "_redraw"):
+                                child._redraw()
+                        except Exception:
+                            pass
+                walk(child)
+
+        walk(self.root)
+        for card in getattr(self, "_theme_cards", []):
+            try:
+                card.canvas.configure(bg=BG)
+                card._redraw()
+            except Exception:
+                pass
+        try:
+            self.graph.configure(bg=CARD)
+            self._draw_analysis()
+        except Exception:
+            pass
+
+    def _animate_theme(self, target, duration=0.5):
         if getattr(self, "_animating", False):
             return
         if getattr(self, "_theme_roles", None) is None:
             self._collect_theme_targets()
         self._animating = True
         start_pal = dict(PALETTE)
-        roles = self._theme_roles
-        canvases = self._theme_canvases
-        cards = self._theme_cards
-        steps = 14
+        roles = list(self._theme_roles)
+        canvases = list(self._theme_canvases)
+        cards = list(self._theme_cards)
+        dialogs = list(getattr(self, "_theme_dialogs", []))
+        started = time.monotonic()
 
         def ease(x):
             return x * x * (3 - 2 * x)
 
-        def frame(i=0):
-            t = ease(i / steps)
-            pal = {k: lerp_hex(start_pal[k], target[k], t) for k in target}
+        def frame():
+            elapsed = time.monotonic() - started
+            t = min(1.0, elapsed / duration)
+            pal = {k: lerp_hex(start_pal[k], target[k], ease(t)) for k in target}
             set_palette_values(pal)
             try:
                 self.root.configure(bg=BG)
@@ -1211,19 +2076,56 @@ class App:
                     card._redraw()
                 except Exception:
                     pass
+            for dlg in dialogs:
+                try:
+                    dlg.theme_frame()
+                except Exception:
+                    pass
             try:
-                self.graph.configure(bg=CARD)
-                self._draw_analysis()
+                self.graph.itemconfigure("abg", fill=CARD)
+                self.graph.itemconfigure("agrid", fill=GRID)
+                self.graph.itemconfigure("aaxis", fill=AXIS)
+                self.graph.itemconfigure("acurve", fill=ACCENT)
             except Exception:
                 pass
-            if i < steps:
-                self.root.after(16, lambda: frame(i + 1))
-            else:
-                set_palette_values(dict(target))
-                self._animating = False
-                set_dark_titlebar(self.root, target is DARK)
+            if t < 1.0:
+                self.root.after(16, frame)
+                return
+            set_palette_values(dict(target))
+            self._apply_palette_to_widgets(target)
+            self._redraw_all_canvases()
+            for dlg in dialogs:
+                try:
+                    dlg.theme_frame()
+                except Exception:
+                    pass
+            self._theme_roles = None
+            self._animating = False
+            if getattr(self, "_pending_build", False):
+                self._pending_build = False
+                try:
+                    self.build()
+                except Exception:
+                    pass
 
         frame()
+
+    def _on_close(self):
+        self._animating = False
+        try:
+            self.root.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+        for w in list(self.root.winfo_children()):
+            if isinstance(w, tk.Toplevel):
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
     def _toggle_pin(self):
         self.pinned = self.pin.get()
@@ -1256,6 +2158,10 @@ class App:
         self._update_status()
         self._update_analysis()
         self._theme_roles = None
+        try:
+            self._redraw_all_canvases()
+        except Exception:
+            pass
 
     def device_pattern(self):
         return self._device_map.get(self.device_combo.get(), "")
@@ -1276,6 +2182,18 @@ class App:
         self.ui_state["collapsed"] = sorted(collapsed)
         save_ui_state(self.ui_state)
         self.build()
+
+    def _toggle_volume_match(self):
+        self.volume_match = bool(self.volume_toggle.get())
+        self.ui_state["volume_match"] = self.volume_match
+        save_ui_state(self.ui_state)
+
+    def open_peq(self):
+        PeqEditor(self.root, on_saved=self.build, app=self)
+        self._theme_roles = None
+
+    def open_opra(self):
+        OpraBrowser(self.root, on_import=self.build)
 
     def add_presets(self):
         files = filedialog.askopenfilenames(
@@ -1373,6 +2291,7 @@ class App:
         c.delete("all")
         w = c.winfo_width() or 360
         h = c.winfo_height() or 300
+        c.create_rectangle(0, 0, w, h, fill=CARD, outline="", tags="abg")
         left, right, top, bottom = 6, 26, 8, 18
         plotw = max(60, w - left - right)
         ploth = max(60, h - top - bottom)
@@ -1386,23 +2305,23 @@ class App:
 
         for db in range(-60, 41, 10):
             yy = y_of(db)
-            c.create_line(left, yy, left + plotw, yy, fill=GRID)
+            c.create_line(left, yy, left + plotw, yy, fill=GRID, tags="agrid")
             c.create_text(left + plotw + 3, yy, text=str(db), anchor="w",
-                          fill=MUTED, font=(FONT, 7))
+                          fill=MUTED, font=(FONT, 7), tags="agrid")
         for f in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
             xx = x_of(f)
-            c.create_line(xx, top, xx, top + ploth, fill=GRID)
+            c.create_line(xx, top, xx, top + ploth, fill=GRID, tags="agrid")
             label = ("%dk" % (f // 1000)) if f >= 1000 else str(f)
             c.create_text(xx, top + ploth + 2, text=label, anchor="n",
-                          fill=MUTED, font=(FONT, 7))
-        c.create_line(left, y_of(0), left + plotw, y_of(0), fill=AXIS)
+                          fill=MUTED, font=(FONT, 7), tags="agrid")
+        c.create_line(left, y_of(0), left + plotw, y_of(0), fill=AXIS, tags="aaxis")
         curve = getattr(self, "_curve", None)
         if curve:
             freqs, dbs = curve
             pts = []
             for f, db in zip(freqs, dbs):
                 pts.extend([x_of(f), y_of(max(-60, min(40, db)))])
-            c.create_line(*pts, fill=ACCENT, width=2)
+            c.create_line(*pts, fill=ACCENT, width=2, tags="acurve")
 
     def _update_analysis(self):
         include = self.read_active()
@@ -1428,6 +2347,9 @@ class App:
         self._draw_analysis()
 
     def build(self):
+        if getattr(self, "_animating", False):
+            self._pending_build = True
+            return
         for w in self.frame.winfo_children():
             w.destroy()
 
@@ -1494,6 +2416,27 @@ class App:
             self.status.configure(
                 text="当前生效：EQ 已关闭（bypass）" + dev_suffix, fg=MUTED)
 
+    def preview_preset(self, text):
+        if not self.admin:
+            return False
+        try:
+            name = "_peq_preview.txt"
+            with open(os.path.join(APO_DIR, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            bak = os.path.join(APO_DIR, "config.peq-preview.bak")
+            if os.path.exists(CFG) and not os.path.exists(bak):
+                shutil.copy2(CFG, bak)
+            lines = ["# PEQ 编辑器实时预览 %s" % time.strftime("%H:%M:%S")]
+            pattern = self.device_pattern()
+            if pattern:
+                lines.append("Device: %s" % pattern)
+            lines += ["", "Include: %s" % name, ""]
+            with open(CFG, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines))
+            return True
+        except Exception:
+            return False
+
     def apply(self, fn):
         if not self.admin:
             messagebox.showwarning("需要管理员权限", "请点「以管理员重启」。")
@@ -1519,6 +2462,15 @@ class App:
                 lines.append("# 作用设备: %s" % self.device_combo.get())
                 lines.append("Device: %s" % pattern)
             lines += ["", "Include: %s" % fn, ""]
+            if getattr(self, "volume_match", False):
+                try:
+                    preamp, filters, graphic = parse_preset(src)
+                    comp = estimate_compensation(preamp, filters, graphic)
+                    if abs(comp) >= 0.1:
+                        lines.append("Preamp: %+.1f dB" % comp)
+                        lines.append("# 音量匹配补偿 %+.1f dB" % comp)
+                except Exception:
+                    pass
             content = "\n".join(lines)
             with open(CFG, "w", encoding="utf-8") as fh:
                 fh.write(content)
