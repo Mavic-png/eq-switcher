@@ -194,6 +194,52 @@ DANGER_BORDER = LIGHT["DANGER_BORDER"]
 FONT = "Microsoft YaHei UI"
 
 
+def hex_to_rgb(value):
+    value = value.lstrip("#")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def rgb_to_hex(rgb):
+    return "#%02x%02x%02x" % tuple(max(0, min(255, int(round(v)))) for v in rgb)
+
+
+def lerp_hex(a, b, t):
+    ra, rb = hex_to_rgb(a), hex_to_rgb(b)
+    return rgb_to_hex(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
+
+
+COLOR_KEY = {}
+for _k, _v in LIGHT.items():
+    COLOR_KEY[_v.upper()] = _k
+for _k, _v in DARK.items():
+    COLOR_KEY.setdefault(_v.upper(), _k)
+
+
+def set_palette_values(pal):
+    global PALETTE, BG, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_DARK
+    global ACCENT_SOFT, GREEN, RED, HOVER, ORANGE, ORANGE_SOFT
+    global GRID, AXIS, DANGER_BG, DANGER_HOVER, DANGER_BORDER
+    PALETTE = pal
+    BG = pal["BG"]
+    CARD = pal["CARD"]
+    BORDER = pal["BORDER"]
+    TEXT = pal["TEXT"]
+    MUTED = pal["MUTED"]
+    ACCENT = pal["ACCENT"]
+    ACCENT_DARK = pal["ACCENT_DARK"]
+    ACCENT_SOFT = pal["ACCENT_SOFT"]
+    GREEN = pal["GREEN"]
+    RED = pal["RED"]
+    HOVER = pal["HOVER"]
+    ORANGE = pal["ORANGE"]
+    ORANGE_SOFT = pal["ORANGE_SOFT"]
+    GRID = pal["GRID"]
+    AXIS = pal["AXIS"]
+    DANGER_BG = pal["DANGER_BG"]
+    DANGER_HOVER = pal["DANGER_HOVER"]
+    DANGER_BORDER = pal["DANGER_BORDER"]
+
+
 def set_dark_titlebar(root, dark):
     try:
         root.update_idletasks()
@@ -922,7 +968,8 @@ class App:
                 root.iconbitmap(default=ico)
             except Exception:
                 pass
-        root.geometry("940x700+120+80")
+        _pending_geo = getattr(self, "_pending_geometry", None)
+        root.geometry(_pending_geo or "940x700+120+80")
         root.minsize(860, 600)
         self.ui_state = load_ui_state()
         _theme = self.ui_state.get("theme")
@@ -932,6 +979,17 @@ class App:
         set_dark_titlebar(root, self.dark)
         self.pinned = bool(self.ui_state.get("topmost", True))
         root.attributes("-topmost", self.pinned)
+
+        self._build_ui()
+
+    def _build_ui(self, parent=None):
+        if parent is None:
+            self.container = tk.Frame(self.root, bg=BG)
+            self.container.pack(fill="both", expand=True)
+            parent = self.container
+        else:
+            self.container = parent
+        root = parent
 
         header = tk.Frame(root, bg=BG)
         header.pack(fill="x", padx=20, pady=(18, 6))
@@ -943,7 +1001,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.8", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.9", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -1048,6 +1106,7 @@ class App:
         self.status.pack(fill="x", padx=22, pady=(0, 14))
 
         self.build()
+        self._theme_roles = None
         self.root.after(80, lambda: set_dark_titlebar(self.root, self.dark))
 
     # ---------- 逻辑 ----------
@@ -1069,12 +1128,102 @@ class App:
             self.device_combo.set(label)
 
     def _toggle_theme(self):
-        self.ui_state["theme"] = "dark" if self.theme_switch.get() else "light"
+        dark = self.theme_switch.get()
+        self.ui_state["theme"] = "dark" if dark else "light"
         save_ui_state(self.ui_state)
-        apply_palette(self.theme_switch.get())
-        for w in list(self.root.winfo_children()):
-            w.destroy()
-        self.__init__(self.root)
+        self.dark = dark
+        self._animate_theme(DARK if dark else LIGHT)
+
+    def _collect_theme_targets(self):
+        opts = ("background", "foreground", "activebackground",
+                "activeforeground", "selectbackground", "selectforeground",
+                "highlightbackground", "highlightcolor", "insertbackground")
+        roles = []
+        canvases = []
+        cards = []
+
+        def collect(widget):
+            try:
+                children = widget.winfo_children()
+            except Exception:
+                return
+            for child in children:
+                for opt in opts:
+                    try:
+                        value = child.cget(opt)
+                    except Exception:
+                        continue
+                    if not value:
+                        continue
+                    key = COLOR_KEY.get(str(value).upper())
+                    if key:
+                        roles.append((child, opt, key))
+                if isinstance(child, tk.Canvas):
+                    canvases.append(child)
+                if isinstance(child, Card):
+                    cards.append(child)
+                collect(child)
+
+        collect(self.root)
+        self._theme_roles = roles
+        self._theme_canvases = canvases
+        self._theme_cards = cards
+
+    def _animate_theme(self, target):
+        if getattr(self, "_animating", False):
+            return
+        if getattr(self, "_theme_roles", None) is None:
+            self._collect_theme_targets()
+        self._animating = True
+        start_pal = dict(PALETTE)
+        roles = self._theme_roles
+        canvases = self._theme_canvases
+        cards = self._theme_cards
+        steps = 14
+
+        def ease(x):
+            return x * x * (3 - 2 * x)
+
+        def frame(i=0):
+            t = ease(i / steps)
+            pal = {k: lerp_hex(start_pal[k], target[k], t) for k in target}
+            set_palette_values(pal)
+            try:
+                self.root.configure(bg=BG)
+            except Exception:
+                pass
+            for widget, opt, key in roles:
+                try:
+                    widget.configure(**{opt: pal[key]})
+                except Exception:
+                    continue
+            for canvas in canvases:
+                try:
+                    if hasattr(canvas, "_draw"):
+                        canvas._draw()
+                    elif hasattr(canvas, "_redraw"):
+                        canvas._redraw()
+                except Exception:
+                    pass
+            for card in cards:
+                try:
+                    card.canvas.configure(bg=BG)
+                    card._redraw()
+                except Exception:
+                    pass
+            try:
+                self.graph.configure(bg=CARD)
+                self._draw_analysis()
+            except Exception:
+                pass
+            if i < steps:
+                self.root.after(16, lambda: frame(i + 1))
+            else:
+                set_palette_values(dict(target))
+                self._animating = False
+                set_dark_titlebar(self.root, target is DARK)
+
+        frame()
 
     def _toggle_pin(self):
         self.pinned = self.pin.get()
@@ -1106,6 +1255,7 @@ class App:
                 return
         self._update_status()
         self._update_analysis()
+        self._theme_roles = None
 
     def device_pattern(self):
         return self._device_map.get(self.device_combo.get(), "")
