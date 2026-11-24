@@ -813,7 +813,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.5", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.6", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -900,10 +900,12 @@ class App:
 
         bottom = tk.Frame(root, bg=BG)
         bottom.pack(fill="x", padx=20, pady=(4, 8))
-        RoundedButton(bottom, "刷新列表", self.build, kind="ghost",
+        RoundedButton(bottom, "添加预设", self.add_presets, kind="ghost",
                       width=96).pack(side="left")
-        RoundedButton(bottom, "关闭 EQ", self.bypass, kind="danger",
+        RoundedButton(bottom, "刷新列表", self.build, kind="ghost",
                       width=96).pack(side="left", padx=8)
+        RoundedButton(bottom, "关闭 EQ", self.bypass, kind="danger",
+                      width=96).pack(side="left")
         if not self.admin:
             RoundedButton(bottom, "以管理员重启", relaunch_as_admin,
                           kind="primary", width=128).pack(side="right")
@@ -982,6 +984,32 @@ class App:
         self.ui_state["collapsed"] = sorted(collapsed)
         save_ui_state(self.ui_state)
         self.build()
+
+    def add_presets(self):
+        files = filedialog.askopenfilenames(
+            title="选择 Equalizer APO 预设文件",
+            filetypes=[("Equalizer APO 预设", "*.txt"), ("所有文件", "*.*")])
+        if not files:
+            return
+        try:
+            os.makedirs(EQ_DIR, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("添加失败", str(exc))
+            return
+        added = skipped = 0
+        for src in files:
+            name = os.path.basename(src)
+            dst = os.path.join(EQ_DIR, name)
+            try:
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copy2(src, dst)
+                added += 1
+            except Exception:  # noqa: BLE001
+                skipped += 1
+        self.build()
+        messagebox.showinfo(
+            "添加预设",
+            "已添加 %d 个，跳过 %d 个。\n\n预设目录：\n%s" % (added, skipped, EQ_DIR))
 
     def _preset_menu(self, fn, event):
         menu = tk.Menu(self.root, tearoff=0, bg=CARD, fg=TEXT,
