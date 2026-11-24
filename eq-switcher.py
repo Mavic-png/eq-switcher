@@ -194,6 +194,20 @@ DANGER_BORDER = LIGHT["DANGER_BORDER"]
 FONT = "Microsoft YaHei UI"
 
 
+def set_dark_titlebar(root, dark):
+    try:
+        root.update_idletasks()
+        hwnd = ctypes.windll.user32.GetAncestor(root.winfo_id(), 2)
+        value = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attr, ctypes.byref(value), ctypes.sizeof(value))
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0020)
+    except Exception:
+        pass
+
+
 def apply_palette(dark):
     global PALETTE, BG, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_DARK
     global ACCENT_SOFT, GREEN, RED, HOVER, ORANGE, ORANGE_SOFT
@@ -464,16 +478,16 @@ class Card(tk.Frame):
 
 
 class ThemeSwitch(tk.Canvas):
-    """太阳/月亮主题滑轨开关。"""
+    """太阳 / 月亮分段开关（无滑钮）。"""
 
-    def __init__(self, parent, value=False, command=None, width=96, height=32):
+    def __init__(self, parent, value=False, command=None, width=84, height=30):
         super().__init__(parent, width=width, height=height, bg=BG,
                          highlightthickness=0, bd=0, cursor="hand2")
         self.bw, self.bh = width, height
         self.value = bool(value)
         self.command = command
         self.bind("<Configure>", lambda e: self._draw())
-        self.bind("<Button-1>", self._toggle)
+        self.bind("<Button-1>", self._click)
         self._draw()
 
     def get(self):
@@ -483,40 +497,44 @@ class ThemeSwitch(tk.Canvas):
         self.value = bool(value)
         self._draw()
 
-    def _toggle(self, _e=None):
-        self.value = not self.value
-        self._draw()
-        if self.command:
-            self.command()
+    def _click(self, event):
+        target = event.x >= self.bw / 2
+        if target != self.value:
+            self.value = target
+            self._draw()
+            if self.command:
+                self.command()
 
     def _draw(self):
         self.delete("all")
         w, h = self.bw, self.bh
         cy = h / 2
-        track = ACCENT if self.value else CARD
-        outline = ACCENT if self.value else BORDER
-        rounded_rect(self, 1, 1, w - 1, h - 1, (h - 2) / 2,
-                     fill=track, outline=outline)
-        sun_col = "#dbe6ff" if self.value else ORANGE
+        r = (h - 2) / 2
+        rounded_rect(self, 1, 1, w - 1, h - 1, r, fill=CARD, outline=BORDER)
+        if self.value:
+            rounded_rect(self, w / 2 - 8, 1, w - 1, h - 1, r,
+                         fill=ACCENT, outline=ACCENT)
+        else:
+            rounded_rect(self, 1, 1, w / 2 + 8, h - 1, r,
+                         fill=ACCENT, outline=ACCENT)
+        self.create_line(w / 2, 5, w / 2, h - 5, fill=BORDER)
+        sun_col = MUTED if self.value else "#ffffff"
         moon_col = "#ffffff" if self.value else MUTED
-        # 太阳（左）
-        sx = 14
-        self.create_oval(sx - 2.5, cy - 2.5, sx + 2.5, cy + 2.5,
+        moon_bg = ACCENT if self.value else CARD
+        # 太阳
+        sx, sy = w * 0.25, cy
+        self.create_oval(sx - 3, sy - 3, sx + 3, sy + 3,
                          outline=sun_col, width=1.4)
-        for dx, dy in ((0, -6), (0, 6), (-6, 0), (6, 0)):
-            self.create_line(sx + dx * 0.75, cy + dy * 0.75,
-                             sx + dx, cy + dy, fill=sun_col, width=1)
-        # 月亮（右）
-        mx = w - 14
-        self.create_oval(mx - 3.5, cy - 5, mx + 3.5, cy + 5,
+        for dx, dy in ((0, -7.5), (0, 7.5), (-7.5, 0), (7.5, 0),
+                       (-5.5, -5.5), (5.5, -5.5), (-5.5, 5.5), (5.5, 5.5)):
+            self.create_line(sx + dx * 0.62, sy + dy * 0.62,
+                             sx + dx, sy + dy, fill=sun_col, width=1)
+        # 月亮
+        mx, my = w * 0.75, cy
+        self.create_oval(mx - 4.5, my - 5, mx + 4.5, my + 5,
                          outline=moon_col, width=1.4)
-        self.create_oval(mx - 0.5, cy - 6, mx + 6.5, cy + 4,
-                         outline=track, fill=track, width=0)
-        # 滑钮
-        knob_x = w * 0.62 if self.value else w * 0.38
-        knob_fill = "#ffffff" if self.value else ACCENT
-        self.create_oval(knob_x - 9, cy - 9, knob_x + 9, cy + 9,
-                         fill=knob_fill, outline=knob_fill)
+        self.create_oval(mx - 0.5, my - 6, mx + 7.5, my + 4.5,
+                         outline=moon_bg, fill=moon_bg, width=0)
 
 
 class GroupHeader(tk.Canvas):
@@ -910,6 +928,8 @@ class App:
         _theme = self.ui_state.get("theme")
         self.dark = True if _theme is None else (_theme == "dark")
         apply_palette(self.dark)
+        root.configure(bg=BG)
+        set_dark_titlebar(root, self.dark)
         self.pinned = bool(self.ui_state.get("topmost", True))
         root.attributes("-topmost", self.pinned)
 
@@ -923,7 +943,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.7", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.8", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -1028,6 +1048,7 @@ class App:
         self.status.pack(fill="x", padx=22, pady=(0, 14))
 
         self.build()
+        self.root.after(80, lambda: set_dark_titlebar(self.root, self.dark))
 
     # ---------- 逻辑 ----------
     def read_active(self):
