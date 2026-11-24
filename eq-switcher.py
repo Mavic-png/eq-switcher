@@ -152,20 +152,71 @@ def preset_group(fn):
     return "其他"
 
 # ---- RVC STUDIO 风格配色 ----
-BG = "#eef1f6"
-CARD = "#ffffff"
-BORDER = "#e3e8f0"
-TEXT = "#16233d"
-MUTED = "#7b8496"
-ACCENT = "#2f5bea"
-ACCENT_SOFT = "#eaf0ff"
-GREEN = "#1f9d55"
-RED = "#d64545"
-HOVER = "#f6f8fc"
-ORANGE = "#b45309"
-ORANGE_SOFT = "#fff7ed"
-
+LIGHT = {
+    "BG": "#eef1f6", "CARD": "#ffffff", "BORDER": "#e3e8f0",
+    "TEXT": "#16233d", "MUTED": "#7b8496", "ACCENT": "#2f5bea",
+    "ACCENT_DARK": "#2448c9", "ACCENT_SOFT": "#eaf0ff",
+    "GREEN": "#1f9d55", "RED": "#d64545", "HOVER": "#f6f8fc",
+    "ORANGE": "#b45309", "ORANGE_SOFT": "#fff7ed",
+    "GRID": "#eef1f6", "AXIS": "#d9dee8",
+    "DANGER_BG": "#fff5f5", "DANGER_HOVER": "#ffecec",
+    "DANGER_BORDER": "#f3c7c7", "WHITE": "#ffffff",
+}
+DARK = {
+    "BG": "#10151d", "CARD": "#1a2230", "BORDER": "#2a3445",
+    "TEXT": "#e7edf7", "MUTED": "#8c9ab0", "ACCENT": "#5b8cff",
+    "ACCENT_DARK": "#7aa2ff", "ACCENT_SOFT": "#1d2c4a",
+    "GREEN": "#2fbf71", "RED": "#ff6b6b", "HOVER": "#222d3f",
+    "ORANGE": "#f0a35e", "ORANGE_SOFT": "#3a2a1c",
+    "GRID": "#232d3d", "AXIS": "#3a475c",
+    "DANGER_BG": "#3a1f22", "DANGER_HOVER": "#4a2428",
+    "DANGER_BORDER": "#6b3a3f", "WHITE": "#ffffff",
+}
+PALETTE = LIGHT
+BG = LIGHT["BG"]
+CARD = LIGHT["CARD"]
+BORDER = LIGHT["BORDER"]
+TEXT = LIGHT["TEXT"]
+MUTED = LIGHT["MUTED"]
+ACCENT = LIGHT["ACCENT"]
+ACCENT_DARK = LIGHT["ACCENT_DARK"]
+ACCENT_SOFT = LIGHT["ACCENT_SOFT"]
+GREEN = LIGHT["GREEN"]
+RED = LIGHT["RED"]
+HOVER = LIGHT["HOVER"]
+ORANGE = LIGHT["ORANGE"]
+ORANGE_SOFT = LIGHT["ORANGE_SOFT"]
+GRID = LIGHT["GRID"]
+AXIS = LIGHT["AXIS"]
+DANGER_BG = LIGHT["DANGER_BG"]
+DANGER_HOVER = LIGHT["DANGER_HOVER"]
+DANGER_BORDER = LIGHT["DANGER_BORDER"]
 FONT = "Microsoft YaHei UI"
+
+
+def apply_palette(dark):
+    global PALETTE, BG, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_DARK
+    global ACCENT_SOFT, GREEN, RED, HOVER, ORANGE, ORANGE_SOFT
+    global GRID, AXIS, DANGER_BG, DANGER_HOVER, DANGER_BORDER
+    PALETTE = DARK if dark else LIGHT
+    BG = PALETTE["BG"]
+    CARD = PALETTE["CARD"]
+    BORDER = PALETTE["BORDER"]
+    TEXT = PALETTE["TEXT"]
+    MUTED = PALETTE["MUTED"]
+    ACCENT = PALETTE["ACCENT"]
+    ACCENT_DARK = PALETTE["ACCENT_DARK"]
+    ACCENT_SOFT = PALETTE["ACCENT_SOFT"]
+    GREEN = PALETTE["GREEN"]
+    RED = PALETTE["RED"]
+    HOVER = PALETTE["HOVER"]
+    ORANGE = PALETTE["ORANGE"]
+    ORANGE_SOFT = PALETTE["ORANGE_SOFT"]
+    GRID = PALETTE["GRID"]
+    AXIS = PALETTE["AXIS"]
+    DANGER_BG = PALETTE["DANGER_BG"]
+    DANGER_HOVER = PALETTE["DANGER_HOVER"]
+    DANGER_BORDER = PALETTE["DANGER_BORDER"]
 
 
 def rounded_rect(canvas, x1, y1, x2, y2, r, **kw):
@@ -195,13 +246,13 @@ class RoundedButton(tk.Canvas):
 
     def _palette(self):
         if self.kind == "primary":
-            fill = ACCENT if not self._hover else "#2448c9"
+            fill = ACCENT if not self._hover else ACCENT_DARK
             text = "#ffffff"
             outline = fill
         elif self.kind == "danger":
-            fill = "#fff5f5" if not self._hover else "#ffecec"
+            fill = DANGER_BG if not self._hover else DANGER_HOVER
             text = RED
-            outline = "#f3c7c7"
+            outline = DANGER_BORDER
         else:
             fill = CARD if not self._hover else HOVER
             text = TEXT
@@ -410,6 +461,62 @@ class Card(tk.Frame):
                      fill=CARD, outline=BORDER, tags="bg")
         self.canvas.tag_lower("bg")
         self.canvas.itemconfigure(self._win, width=w - 28, height=max(1, h - 24))
+
+
+class ThemeSwitch(tk.Canvas):
+    """太阳/月亮主题滑轨开关。"""
+
+    def __init__(self, parent, value=False, command=None, width=96, height=32):
+        super().__init__(parent, width=width, height=height, bg=BG,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.bw, self.bh = width, height
+        self.value = bool(value)
+        self.command = command
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Button-1>", self._toggle)
+        self._draw()
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = bool(value)
+        self._draw()
+
+    def _toggle(self, _e=None):
+        self.value = not self.value
+        self._draw()
+        if self.command:
+            self.command()
+
+    def _draw(self):
+        self.delete("all")
+        w, h = self.bw, self.bh
+        cy = h / 2
+        track = ACCENT if self.value else CARD
+        outline = ACCENT if self.value else BORDER
+        rounded_rect(self, 1, 1, w - 1, h - 1, (h - 2) / 2,
+                     fill=track, outline=outline)
+        sun_col = "#dbe6ff" if self.value else ORANGE
+        moon_col = "#ffffff" if self.value else MUTED
+        # 太阳（左）
+        sx = 14
+        self.create_oval(sx - 2.5, cy - 2.5, sx + 2.5, cy + 2.5,
+                         outline=sun_col, width=1.4)
+        for dx, dy in ((0, -6), (0, 6), (-6, 0), (6, 0)):
+            self.create_line(sx + dx * 0.75, cy + dy * 0.75,
+                             sx + dx, cy + dy, fill=sun_col, width=1)
+        # 月亮（右）
+        mx = w - 14
+        self.create_oval(mx - 3.5, cy - 5, mx + 3.5, cy + 5,
+                         outline=moon_col, width=1.4)
+        self.create_oval(mx - 0.5, cy - 6, mx + 6.5, cy + 4,
+                         outline=track, fill=track, width=0)
+        # 滑钮
+        knob_x = w * 0.62 if self.value else w * 0.38
+        knob_fill = "#ffffff" if self.value else ACCENT
+        self.create_oval(knob_x - 9, cy - 9, knob_x + 9, cy + 9,
+                         fill=knob_fill, outline=knob_fill)
 
 
 class GroupHeader(tk.Canvas):
@@ -800,6 +907,9 @@ class App:
         root.geometry("940x700+120+80")
         root.minsize(860, 600)
         self.ui_state = load_ui_state()
+        _theme = self.ui_state.get("theme")
+        self.dark = True if _theme is None else (_theme == "dark")
+        apply_palette(self.dark)
         self.pinned = bool(self.ui_state.get("topmost", True))
         root.attributes("-topmost", self.pinned)
 
@@ -813,7 +923,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.6", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.7", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -822,6 +932,9 @@ class App:
         self.mode.pack(anchor="e", pady=(4, 0))
         self.pin = PinButton(right, value=self.pinned, command=self._toggle_pin)
         self.pin.pack(anchor="e", pady=(4, 0))
+        self.theme_switch = ThemeSwitch(right, value=self.dark,
+                                        command=self._toggle_theme)
+        self.theme_switch.pack(anchor="e", pady=(4, 0))
 
         body = tk.Frame(root, bg=BG)
         body.pack(fill="both", expand=True, padx=20, pady=(0, 10))
@@ -933,6 +1046,14 @@ class App:
                 self.device_combo.options + [label], keep=label)
         else:
             self.device_combo.set(label)
+
+    def _toggle_theme(self):
+        self.ui_state["theme"] = "dark" if self.theme_switch.get() else "light"
+        save_ui_state(self.ui_state)
+        apply_palette(self.theme_switch.get())
+        for w in list(self.root.winfo_children()):
+            w.destroy()
+        self.__init__(self.root)
 
     def _toggle_pin(self):
         self.pinned = self.pin.get()
@@ -1094,16 +1215,16 @@ class App:
 
         for db in range(-60, 41, 10):
             yy = y_of(db)
-            c.create_line(left, yy, left + plotw, yy, fill="#eef1f6")
+            c.create_line(left, yy, left + plotw, yy, fill=GRID)
             c.create_text(left + plotw + 3, yy, text=str(db), anchor="w",
                           fill=MUTED, font=(FONT, 7))
         for f in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
             xx = x_of(f)
-            c.create_line(xx, top, xx, top + ploth, fill="#eef1f6")
+            c.create_line(xx, top, xx, top + ploth, fill=GRID)
             label = ("%dk" % (f // 1000)) if f >= 1000 else str(f)
             c.create_text(xx, top + ploth + 2, text=label, anchor="n",
                           fill=MUTED, font=(FONT, 7))
-        c.create_line(left, y_of(0), left + plotw, y_of(0), fill="#d9dee8")
+        c.create_line(left, y_of(0), left + plotw, y_of(0), fill=AXIS)
         curve = getattr(self, "_curve", None)
         if curve:
             freqs, dbs = curve
