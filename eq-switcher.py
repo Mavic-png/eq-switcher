@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Equalizer APO 预设实时切换器（RVC STUDIO 风格 UI）
 - 自动发现 F:\\int\\eq 下的 *.txt 预设
@@ -17,7 +17,7 @@ import time
 import tkinter as tk
 import webbrowser
 import winreg
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 def base_dir():
     if getattr(sys, "frozen", False):
@@ -28,7 +28,64 @@ def base_dir():
 EQ_DIR = r"F:\int\eq"
 if not os.path.isdir(EQ_DIR):
     EQ_DIR = os.path.join(base_dir(), "presets")
-APO_DIR = r"C:\Program Files\EqualizerAPO\config"
+
+APO_STATE = os.path.join(base_dir(), "apo_path.json")
+
+
+def load_saved_apo():
+    try:
+        with open(APO_STATE, "r", encoding="utf-8") as fh:
+            return json.load(fh).get("config_dir")
+    except Exception:
+        return None
+
+
+def save_apo_dir(path):
+    try:
+        with open(APO_STATE, "w", encoding="utf-8") as fh:
+            json.dump({"config_dir": path}, fh, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def find_apo_dir():
+    cands = []
+    saved = load_saved_apo()
+    if saved:
+        cands.append(saved)
+    env = os.environ.get("EQUALIZERAPO_CONFIG")
+    if env:
+        cands.append(env)
+    for sub in (r"SOFTWARE\EqualizerAPO", r"SOFTWARE\WOW6432Node\EqualizerAPO"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, sub) as k:
+                try:
+                    cands.append(winreg.QueryValueEx(k, "ConfigPath")[0])
+                except OSError:
+                    pass
+                try:
+                    cands.append(os.path.join(
+                        winreg.QueryValueEx(k, "InstallPath")[0], "config"))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    for pf in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        if pf:
+            cands.append(os.path.join(pf, "EqualizerAPO", "config"))
+    for letter in "CDEFGH":
+        cands.append(os.path.join(letter + ":\\Program Files\\EqualizerAPO\\config"))
+        cands.append(os.path.join(letter + ":\\Program Files (x86)\\EqualizerAPO\\config"))
+    for c in cands:
+        if c and os.path.isdir(c) and os.path.exists(os.path.join(c, "config.txt")):
+            return c
+    for c in cands:
+        if c and os.path.isdir(c):
+            return c
+    return None
+
+
+APO_DIR = find_apo_dir() or r"C:\Program Files\EqualizerAPO\config"
 CFG = os.path.join(APO_DIR, "config.txt")
 
 NAME_MAP = {
@@ -40,6 +97,8 @@ NAME_MAP = {
     "hd490pro-game.txt": "490 Pro 打瓦 HRTF（通用）",
     "hd490pro-valorant.txt": "490 Pro 打瓦专用（脚步强化）",
     "hd490pro-valorant-hrtf.txt": "490 Pro 打瓦·HRTF 补偿版",
+    "hd490pro-sim-dt700.txt": "490 Pro 模拟 DT 700（厚低频）",
+    "hd490pro-sim-hd800s.txt": "490 Pro 模拟 HD 800S（6k峰）",
     "dt700.txt": "DT 700 Pro X 听歌",
     "h6air-harman.txt": "H6 Air · Harman 目标（参数）",
     "h6air-graphic.txt": "H6 Air · Harman 目标（图形）",
@@ -720,7 +779,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.3", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.4", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -1139,30 +1198,46 @@ def find_installer():
     return None
 
 
+def _offer_install():
+    inst = find_installer()
+    if inst:
+        ans = messagebox.askyesno(
+            "未安装 Equalizer APO",
+            "没有检测到 Equalizer APO。\n\n"
+            "找到一个安装包：\n%s\n\n是否现在运行安装程序？\n"
+            "（安装时勾选你的输出设备，完成后重启）" % inst)
+        if ans:
+            try:
+                os.startfile(inst)
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("启动安装失败", str(exc))
+    else:
+        ans = messagebox.askyesno(
+            "未安装 Equalizer APO",
+            "没有检测到 Equalizer APO。\n\n"
+            "是否打开官方下载页？\n"
+            "下载后放进安装程序所在的 installer 文件夹，"
+            "重新运行本程序即可自动引导安装。")
+        if ans:
+            webbrowser.open("https://sourceforge.net/projects/equalizerapo/files/")
+    return 1
+
+
 def main():
+    global APO_DIR, CFG
     if not os.path.isdir(APO_DIR):
-        inst = find_installer()
-        if inst:
-            ans = messagebox.askyesno(
-                "未安装 Equalizer APO",
-                "没有检测到 Equalizer APO。\n\n"
-                "找到一个安装包：\n%s\n\n是否现在运行安装程序？\n"
-                "（安装时勾选你的输出设备，完成后重启）" % inst)
-            if ans:
-                try:
-                    os.startfile(inst)
-                except Exception as exc:  # noqa: BLE001
-                    messagebox.showerror("启动安装失败", str(exc))
+        picked = filedialog.askopenfilename(
+            title="选择 Equalizer APO 的 config.txt（可取消）",
+            filetypes=[("config.txt", "config.txt"), ("文本文件", "*.txt")])
+        if picked:
+            APO_DIR = os.path.dirname(picked)
+            CFG = os.path.join(APO_DIR, "config.txt")
+            save_apo_dir(APO_DIR)
         else:
-            ans = messagebox.askyesno(
-                "未安装 Equalizer APO",
-                "没有检测到 Equalizer APO。\n\n"
-                "是否打开官方下载页？\n"
-                "下载后放进安装程序所在的 installer 文件夹，"
-                "重新运行本程序即可自动引导安装。")
-            if ans:
-                webbrowser.open("https://sourceforge.net/projects/equalizerapo/files/")
-        return 1
+            return _offer_install()
+    if not os.path.isdir(APO_DIR):
+        return _offer_install()
+
     root = tk.Tk()
     try:
         App(root)
