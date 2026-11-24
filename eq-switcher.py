@@ -25,9 +25,42 @@ def base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _has_presets(path):
+    try:
+        return os.path.isdir(path) and any(
+            f.lower().endswith(".txt") for f in os.listdir(path))
+    except OSError:
+        return False
+
+
 EQ_DIR = r"F:\int\eq"
-if not os.path.isdir(EQ_DIR):
+if not _has_presets(EQ_DIR):
     EQ_DIR = os.path.join(base_dir(), "presets")
+
+def _bundled_dir(name):
+    base = getattr(sys, "_MEIPASS", base_dir())
+    path = os.path.join(base, name)
+    return path if os.path.isdir(path) else None
+
+
+def ensure_local_presets():
+    """回退到本地 presets 时，把随程序打包的预设复制过去。"""
+    local = os.path.join(base_dir(), "presets")
+    if os.path.abspath(EQ_DIR) != os.path.abspath(local):
+        return
+    os.makedirs(local, exist_ok=True)
+    src = _bundled_dir("presets")
+    if not src:
+        return
+    for name in os.listdir(src):
+        if name.lower().endswith(".txt"):
+            dst = os.path.join(local, name)
+            if not os.path.exists(dst):
+                try:
+                    shutil.copyfile(os.path.join(src, name), dst)
+                except OSError:
+                    pass
+
 
 APO_STATE = os.path.join(base_dir(), "apo_path.json")
 
@@ -85,6 +118,7 @@ def find_apo_dir():
     return None
 
 
+ensure_local_presets()
 APO_DIR = find_apo_dir() or r"C:\Program Files\EqualizerAPO\config"
 CFG = os.path.join(APO_DIR, "config.txt")
 
@@ -779,7 +813,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v1.4", bg=BG, fg=MUTED,
+        tk.Label(right, text="v1.5", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -1090,7 +1124,7 @@ class App:
         tk.Label(self.frame, text="预设", bg=CARD, fg=MUTED,
                  font=(FONT, 8, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
         if not presets:
-            tk.Label(self.frame, text="F:\\int\\eq 下没有找到预设文件",
+            tk.Label(self.frame, text="%s 下没有找到预设文件" % EQ_DIR,
                      bg=CARD, fg=RED, font=(FONT, 10)).pack(anchor="w", padx=4)
         else:
             groups = {}
@@ -1146,6 +1180,9 @@ class App:
             return
         src = os.path.join(EQ_DIR, fn)
         dst = os.path.join(APO_DIR, fn)
+        if not os.path.isfile(src):
+            messagebox.showerror("预设不存在", "找不到预设文件：\n%s" % src)
+            return
         try:
             if os.path.abspath(src) != os.path.abspath(dst):
                 shutil.copy2(src, dst)
