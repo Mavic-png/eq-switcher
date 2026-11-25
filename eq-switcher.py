@@ -7,6 +7,7 @@ Equalizer APO 预设实时切换器（RVC STUDIO 风格 UI）
 仅使用标准库：tkinter / ctypes / os / shutil / sys / time
 """
 import ctypes
+import glob
 import math
 import os
 import re
@@ -14,12 +15,18 @@ import shutil
 import json
 import sys
 import time
+import zipfile
 import threading
 import queue
 import tkinter as tk
 import webbrowser
 import winreg
 from tkinter import filedialog, messagebox, simpledialog
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+except Exception:
+    TkinterDnD = None
+    DND_FILES = None
 
 def base_dir():
     if getattr(sys, "frozen", False):
@@ -141,6 +148,10 @@ NAME_MAP = {
 }
 
 GROUP_ORDER = ["HD 490 PRO", "DT 700 Pro X", "Sony INZONE H6 Air", "其他"]
+FAVORITE_GROUP = "★ 收藏"
+APP_VERSION = "v2.0.2"
+COMPARE_COLORS = ["#7c3aed", "#2f9e6e", "#d97706"]
+UPDATE_API = "https://api.github.com/repos/Mavic-png/eq-switcher/releases/latest"
 
 
 def preset_group(fn):
@@ -1126,6 +1137,8 @@ class PeqEditor(tk.Toplevel):
         self.preamp = 0.0
         self.drag = None
         self._cursor = None
+        self._undo_stack = []
+        self._redo_stack = []
         if initial:
             self.preamp = float(initial.get("preamp") or 0.0)
             self.filters = [dict(f) for f in (initial.get("filters") or [])]
@@ -1196,10 +1209,18 @@ class PeqEditor(tk.Toplevel):
                       width=92, height=32).pack(side="left", padx=6)
         RoundedButton(bottom, "保存为预设", self.save, kind="primary",
                       width=104, height=32).pack(side="left", padx=(6, 0))
+        if self.target_fn:
+            RoundedButton(bottom, "另存为", lambda: self.save(True),
+                          kind="ghost", width=80, height=32).pack(
+                side="left", padx=(6, 0))
         RoundedButton(bottom, "关闭", self._close, kind="ghost",
                       width=72, height=32).pack(side="right")
         self.protocol("WM_DELETE_WINDOW", self._close)
-        self.status = tk.Label(self, text="拖动圆点改频率/增益；滚轮调 Q。",
+        self.bind("<Control-z>", self.undo)
+        self.bind("<Control-Z>", self.undo)
+        self.bind("<Control-y>", self.redo)
+        self.bind("<Control-Y>", self.redo)
+        self.status = tk.Label(self, text="拖动圆点改频率/增益；滚轮调 Q；Ctrl+Z 撤销，Ctrl+Y 重做。",
                                bg=BG, fg=MUTED, anchor="w", font=(FONT, 9))
         self.status.pack(fill="x", padx=16, pady=(0, 8))
 
@@ -1314,6 +1335,7 @@ class PeqEditor(tk.Toplevel):
 
     # ---------- 交互 ----------
     def on_press(self, event):
+        self._push_undo()
         best, best_d = -1, 14.0
         for i, flt in enumerate(self.filters):
             dx = self.f_to_x(flt["f"]) - event.x
@@ -1337,6 +1359,7 @@ class PeqEditor(tk.Toplevel):
     def on_wheel(self, event):
         if not (0 <= self.selected < len(self.filters)):
             return
+        self._push_undo()
         flt = self.filters[self.selected]
         factor = 1.12 if event.delta > 0 else 1 / 1.12
         flt["q"] = max(0.1, min(20.0, flt["q"] * factor))
@@ -1344,6 +1367,7 @@ class PeqEditor(tk.Toplevel):
         self._schedule_preview()
 
     def apply_fields(self):
+        before = self._snapshot()
         try:
             self.preamp = float(self.preamp_var.get())
         except ValueError:
@@ -1357,6 +1381,11 @@ class PeqEditor(tk.Toplevel):
                 flt["q"] = max(0.1, min(20.0, float(self.q_var.get())))
             except ValueError:
                 pass
+        if self._snapshot() != before:
+            self._undo_stack.append(before)
+            if len(self._undo_stack) > 60:
+                self._undo_stack.pop(0)
+            self._redo_stack.clear()
         self.redraw()
         self._schedule_preview()
 
@@ -1408,7 +1437,45 @@ class PeqEditor(tk.Toplevel):
         candidates = [30.0 * (533.33 ** (i / 24.0)) for i in range(25)]
         return float(max(candidates, key=distance))
 
+    def _snapshot(self):
+        return {
+            "preamp": self.preamp,
+            "filters": [dict(f) for f in self.filters],
+            "graphic": list(self.graphic),
+            "selected": self.selected,
+        }
+
+    def _restore_snapshot(self, state):
+        self.preamp = state["preamp"]
+        self.filters = [dict(f) for f in state["filters"]]
+        self.graphic = list(state["graphic"])
+        self.selected = min(state["selected"], len(self.filters) - 1)
+        self.update_fields()
+        self.redraw()
+        self._schedule_preview()
+
+    def _push_undo(self):
+        self._undo_stack.append(self._snapshot())
+        if len(self._undo_stack) > 60:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+
+    def undo(self, _e=None):
+        if not self._undo_stack:
+            return "break"
+        self._redo_stack.append(self._snapshot())
+        self._restore_snapshot(self._undo_stack.pop())
+        return "break"
+
+    def redo(self, _e=None):
+        if not self._redo_stack:
+            return "break"
+        self._undo_stack.append(self._snapshot())
+        self._restore_snapshot(self._redo_stack.pop())
+        return "break"
+
     def add_band(self):
+        self._push_undo()
         self.filters.append({"type": "PK", "f": self._next_band_frequency(),
                              "g": 0.0, "q": 1.0})
         self.selected = len(self.filters) - 1
@@ -1417,6 +1484,7 @@ class PeqEditor(tk.Toplevel):
 
     def del_band(self):
         if 0 <= self.selected < len(self.filters):
+            self._push_undo()
             self.filters.pop(self.selected)
             self.selected = min(self.selected, len(self.filters) - 1)
             self.redraw()
@@ -1484,9 +1552,10 @@ class PeqEditor(tk.Toplevel):
         self._restore()
         self.destroy()
 
-    def _ask_name(self):
-        initial = (os.path.splitext(self.target_fn)[0] if self.target_fn
-                   else "peq")
+    def _ask_name(self, initial=None):
+        if not initial:
+            initial = (os.path.splitext(self.target_fn)[0] if self.target_fn
+                       else "peq")
         top = tk.Toplevel(self)
         top.title("保存预设")
         top.configure(bg=BG)
@@ -1536,15 +1605,19 @@ class PeqEditor(tk.Toplevel):
         self.wait_window(top)
         return result["value"]
 
-    def save(self):
-        name = self._ask_name()
+    def save(self, save_as=False):
+        initial = None
+        if save_as and self.target_fn:
+            initial = os.path.splitext(self.target_fn)[0] + " 副本"
+        name = self._ask_name(initial)
         if not name:
             return
         text = self._serialize()
         os.makedirs(EQ_DIR, exist_ok=True)
         filename = safe_preset_name(name, "peq") + ".txt"
         path = os.path.join(EQ_DIR, filename)
-        overwrite = (self.target_fn is not None and filename == self.target_fn)
+        overwrite = (self.target_fn is not None and filename == self.target_fn
+                     and not save_as)
         if os.path.exists(path) and not overwrite:
             base, ext = os.path.splitext(filename)
             n = 2
@@ -1653,7 +1726,22 @@ class OpraBrowser(tk.Toplevel):
                 return
             self._download_async()
             return
-        self.reload()
+        self._load_async()
+
+    def _load_async(self):
+        if self._busy:
+            return
+        self._set_busy(True)
+        self.status.configure(text="正在读取数据库…")
+
+        def work():
+            try:
+                vendors, products, eqs = load_opra_database()
+                self._queue.put(("db", vendors, products, eqs))
+            except Exception as exc:  # noqa: BLE001
+                self._queue.put(("error", str(exc)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def reload(self):
         try:
@@ -1706,7 +1794,8 @@ class OpraBrowser(tk.Toplevel):
             try:
                 download_opra_database(
                     lambda done, total: self._queue.put(("progress", done, total)))
-                self._queue.put(("done",))
+                vendors, products, eqs = load_opra_database()
+                self._queue.put(("db", vendors, products, eqs))
             except Exception as exc:  # noqa: BLE001
                 self._queue.put(("error", str(exc)))
 
@@ -1730,9 +1819,14 @@ class OpraBrowser(tk.Toplevel):
                         self._draw_progress(None)
                         self.status.configure(
                             text="正在下载数据库… %.1f MB" % (done / 1024 ** 2))
-                elif kind == "done":
+                elif kind == "db":
                     self._set_busy(False)
-                    self.reload()
+                    self.vendors, self.products, self.eqs = msg[1], msg[2], msg[3]
+                    self.status.configure(
+                        text="共 %d 个型号，%d 条 EQ。输入型号后回车搜索。"
+                             % (len(self.products),
+                                sum(len(v) for v in self.eqs.values())))
+                    self.search()
                 elif kind == "error":
                     self._set_busy(False)
                     self.status.configure(text="下载失败：%s" % msg[1])
@@ -1901,8 +1995,16 @@ class App:
         self.active_fn = None
         self.volume_match = bool(self.ui_state.get("volume_match", True))
         root.attributes("-topmost", self.pinned)
+        self.filter_var = tk.StringVar(value="")
+        self.filter_var.trace_add("write", self._on_filter_changed)
+        self._filter_entry = None
+        self._filter_job = None
+        self._keep_filter_focus = False
+        self._update_queue = queue.Queue()
 
         self._build_ui()
+        self._install_dnd()
+        self.root.after(1800, self._check_updates_async)
 
     def _build_ui(self, parent=None):
         if parent is None:
@@ -1923,7 +2025,7 @@ class App:
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", anchor="n")
-        tk.Label(right, text="v2.0.1", bg=BG, fg=MUTED,
+        tk.Label(right, text=APP_VERSION, bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
         self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
@@ -2025,6 +2127,9 @@ class App:
                       width=96).pack(side="left", padx=8)
         RoundedButton(bottom, "刷新列表", self.build, kind="ghost",
                       width=96).pack(side="left", padx=8)
+        self.pack_btn = RoundedButton(bottom, "预设包", self._open_pack_menu,
+                                      kind="ghost", width=88)
+        self.pack_btn.pack(side="left")
         RoundedButton(bottom, "关闭 EQ", self.bypass, kind="danger",
                       width=96).pack(side="left")
         if not self.admin:
@@ -2327,6 +2432,205 @@ class App:
         save_ui_state(self.ui_state)
         self.build()
 
+    def _install_dnd(self):
+        if TkinterDnD is None:
+            return
+        try:
+            self.root.drop_target_register(DND_FILES)
+            self.root.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception:
+            pass
+
+    def _on_drop(self, event):
+        try:
+            paths = list(self.root.tk.splitlist(event.data))
+        except Exception:
+            paths = [str(event.data)]
+        self._add_dropped_files(paths)
+
+    def _add_dropped_files(self, paths):
+        added = skipped = 0
+        os.makedirs(EQ_DIR, exist_ok=True)
+        for src in paths:
+            if not os.path.isfile(src) or not src.lower().endswith(".txt"):
+                skipped += 1
+                continue
+            name = safe_preset_name(os.path.splitext(os.path.basename(src))[0],
+                                    "imported") + ".txt"
+            dst = os.path.join(EQ_DIR, name)
+            try:
+                if os.path.abspath(src) == os.path.abspath(dst):
+                    skipped += 1
+                    continue
+                if os.path.exists(dst):
+                    base, ext = os.path.splitext(name)
+                    n = 2
+                    while os.path.exists(os.path.join(
+                            EQ_DIR, "%s-%d%s" % (base, n, ext))):
+                        n += 1
+                    dst = os.path.join(EQ_DIR, "%s-%d%s" % (base, n, ext))
+                shutil.copy2(src, dst)
+                added += 1
+            except OSError:
+                skipped += 1
+        self.build()
+        if added:
+            messagebox.showinfo("添加预设",
+                                "已添加 %d 个，跳过 %d 个。\n\n目录：%s"
+                                % (added, skipped, EQ_DIR))
+
+    def _on_filter_changed(self, *_args):
+        if self._filter_job:
+            try:
+                self.root.after_cancel(self._filter_job)
+            except Exception:
+                pass
+        self._filter_job = self.root.after(160, self._rebuild_filtered)
+
+    def _rebuild_filtered(self):
+        self._filter_job = None
+        self._keep_filter_focus = True
+        self.build()
+
+    def _check_updates_async(self):
+        if not self.ui_state.get("update_check", True):
+            return
+
+        def work():
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    UPDATE_API, headers={
+                        "User-Agent": "EQSwitcher/" + APP_VERSION,
+                        "Accept": "application/vnd.github+json",
+                    })
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                tag = str(data.get("tag_name") or "").lstrip("v")
+                url = data.get("html_url") or ""
+                self._update_queue.put(("info", tag, url))
+            except Exception:
+                self._update_queue.put(("err",))
+
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(400, self._poll_update)
+
+    def _poll_update(self):
+        try:
+            msg = self._update_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(500, self._poll_update)
+            return
+        if msg[0] != "info":
+            return
+        tag, url = msg[1], msg[2]
+
+        def parts(text):
+            out = []
+            for piece in re.split(r"[.\-]", text):
+                out.append(int(piece) if piece.isdigit() else 0)
+            return out
+
+        try:
+            if parts(tag) > parts(APP_VERSION.lstrip("v")):
+                if messagebox.askyesno(
+                        "发现新版本",
+                        "当前版本 %s，最新版本 v%s。\n\n打开 Release 页面？"
+                        % (APP_VERSION, tag)):
+                    webbrowser.open(url)
+        except Exception:
+            pass
+
+    def _open_pack_menu(self):
+        top = tk.Toplevel(self.root)
+        top.overrideredirect(True)
+        top.configure(bg=BORDER)
+        frame = tk.Frame(top, bg=CARD)
+        frame.pack(padx=1, pady=1, fill="both", expand=True)
+
+        def choose(action):
+            top.destroy()
+            action()
+
+        items = (
+            ("导出预设包…", self.export_pack),
+            ("导入预设包…", self.import_pack),
+        )
+        for text, action in items:
+            lbl = tk.Label(frame, text=text, anchor="w", bg=CARD, fg=TEXT,
+                           font=(FONT, 9), padx=14, pady=6, cursor="hand2")
+            lbl.pack(fill="x")
+            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(
+                bg=ACCENT_SOFT, fg=ACCENT))
+            lbl.bind("<Leave>", lambda e, l=lbl: l.configure(
+                bg=CARD, fg=TEXT))
+            lbl.bind("<Button-1>", lambda e, a=action: choose(a))
+        top.update_idletasks()
+        x = self.pack_btn.winfo_rootx()
+        y = self.pack_btn.winfo_rooty() - top.winfo_reqheight() - 4
+        top.attributes("-topmost", True)
+        top.geometry("+%d+%d" % (x, y))
+        top.update()
+        top.lift()
+        top.focus_force()
+        top.bind("<FocusOut>", lambda e: top.destroy())
+        top.bind("<Escape>", lambda e: top.destroy())
+
+    def export_pack(self):
+        path = filedialog.asksaveasfilename(
+            title="导出预设包", defaultextension=".zip",
+            initialfile="eq-presets.zip",
+            filetypes=[("ZIP 压缩包", "*.zip")])
+        if not path:
+            return
+        try:
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for fn in discover():
+                    src = os.path.join(EQ_DIR, fn)
+                    if os.path.isfile(src):
+                        zf.write(src, arcname="presets/" + fn)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("导出失败", str(exc))
+            return
+        messagebox.showinfo("导出完成", "已导出到：\n%s" % path)
+
+    def import_pack(self):
+        path = filedialog.askopenfilename(
+            title="导入预设包", filetypes=[("ZIP 压缩包", "*.zip")])
+        if not path:
+            return
+        added = 0
+        skipped = 0
+        try:
+            with zipfile.ZipFile(path) as zf:
+                for info in zf.infolist():
+                    if not info.filename.lower().endswith(".txt"):
+                        continue
+                    name = safe_preset_name(
+                        os.path.splitext(os.path.basename(info.filename))[0],
+                        "imported") + ".txt"
+                    data = zf.read(info)
+                    if len(data) > 2 * 1024 * 1024:
+                        skipped += 1
+                        continue
+                    dst = os.path.join(EQ_DIR, name)
+                    if os.path.exists(dst):
+                        base, ext = os.path.splitext(name)
+                        n = 2
+                        while os.path.exists(os.path.join(
+                                EQ_DIR, "%s-%d%s" % (base, n, ext))):
+                            n += 1
+                        name = "%s-%d%s" % (base, n, ext)
+                        dst = os.path.join(EQ_DIR, name)
+                    with open(dst, "wb") as fh:
+                        fh.write(data)
+                    added += 1
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("导入失败", str(exc))
+            return
+        self.build()
+        messagebox.showinfo("导入完成", "新增 %d 个预设，跳过 %d 个。" % (added, skipped))
+
     def _toggle_volume_match(self):
         self.volume_match = bool(self.volume_toggle.get())
         self.ui_state["volume_match"] = self.volume_match
@@ -2376,11 +2680,26 @@ class App:
             top.destroy()
             action()
 
-        items = (
+        favorites = set(self.ui_state.get("favorites", []))
+        favorite_label = ("取消收藏" if fn in favorites else "收藏此预设")
+        items = [
             ("编辑此预设", lambda: self.edit_preset(fn)),
+            (favorite_label, lambda: self._toggle_favorite(fn)),
+        ]
+        backup = os.path.join(EQ_DIR, fn + ".bak")
+        if os.path.exists(backup):
+            items.append(("恢复上一版", lambda: self._restore_backup(fn)))
+        compare = self.ui_state.setdefault("compare", [])
+        if fn in compare:
+            items.append(("移出曲线对比", lambda: self._toggle_compare(fn)))
+        else:
+            items.append(("加入曲线对比", lambda: self._toggle_compare(fn)))
+        if compare:
+            items.append(("清空曲线对比", self._clear_compare))
+        items += [
             ("隐藏此预设", lambda: self._hide_preset(fn)),
             ("删除预设文件（回收站）", lambda: self._delete_preset(fn)),
-        )
+        ]
         for text, action in items:
             lbl = tk.Label(frame, text=text, anchor="w", bg=CARD, fg=TEXT,
                            font=(FONT, 9), padx=14, pady=6, cursor="hand2")
@@ -2419,6 +2738,47 @@ class App:
                   target_fn=fn)
         self._theme_roles = None
 
+    def _toggle_compare(self, fn):
+        compare = self.ui_state.setdefault("compare", [])
+        if fn in compare:
+            compare.remove(fn)
+        else:
+            if len(compare) >= 3:
+                compare.pop(0)
+            compare.append(fn)
+        save_ui_state(self.ui_state)
+        self._update_analysis()
+
+    def _clear_compare(self):
+        self.ui_state["compare"] = []
+        save_ui_state(self.ui_state)
+        self._update_analysis()
+
+    def _toggle_favorite(self, fn):
+        favorites = self.ui_state.setdefault("favorites", [])
+        if fn in favorites:
+            favorites.remove(fn)
+        else:
+            favorites.append(fn)
+        save_ui_state(self.ui_state)
+        self.build()
+
+    def _restore_backup(self, fn):
+        path = os.path.join(EQ_DIR, fn)
+        backup = path + ".bak"
+        if not os.path.exists(backup):
+            return
+        if not messagebox.askyesno(
+                "恢复上一版",
+                "用备份覆盖「%s」当前内容？\n\n备份：%s" % (fn, backup)):
+            return
+        try:
+            shutil.copy2(backup, path)
+        except OSError as exc:
+            messagebox.showerror("恢复失败", str(exc))
+            return
+        self.build()
+
     def _hide_preset(self, fn):
         hidden = self.ui_state.setdefault("hidden", [])
         if fn not in hidden:
@@ -2500,6 +2860,18 @@ class App:
             c.create_text(xx, top + ploth + 2, text=label, anchor="n",
                           fill=MUTED, font=(FONT, 7), tags="agrid")
         c.create_line(left, y_of(0), left + plotw, y_of(0), fill=AXIS, tags="aaxis")
+        for idx, (label, cfreqs, cdbs) in enumerate(
+                getattr(self, "_compare_curves", [])[:3]):
+            color = COMPARE_COLORS[idx % len(COMPARE_COLORS)]
+            pts = []
+            for f, db in zip(cfreqs, cdbs):
+                pts.extend([x_of(f), y_of(max(-60, min(40, db)))])
+            c.create_line(*pts, fill=color, width=1.5, tags="acompare")
+            ly = top + 10 + idx * 13
+            c.create_line(left + 6, ly, left + 18, ly, fill=color, width=2,
+                          tags="acompare")
+            c.create_text(left + 22, ly, text=label, anchor="w", fill=MUTED,
+                          font=(FONT, 7), tags="acompare")
         curve = getattr(self, "_curve", None)
         if curve:
             freqs, dbs = curve
@@ -2529,6 +2901,19 @@ class App:
             self.stat_peak.configure(text="峰值增益  —", fg=TEXT)
             self.stat_filters.configure(text="滤波器  —")
             self.stat_preamp.configure(text="预增益  —")
+        self._compare_curves = []
+        for fn in self.ui_state.get("compare", [])[:3]:
+            if fn == include:
+                continue
+            path = os.path.join(EQ_DIR, fn)
+            if not os.path.isfile(path):
+                continue
+            try:
+                preamp, filters, graphic = parse_preset(path)
+                cfreqs, cdbs = response_curve(preamp, filters, graphic)
+            except Exception:
+                continue
+            self._compare_curves.append((NAME_MAP.get(fn, fn), cfreqs, cdbs))
         self._draw_analysis()
 
     def build(self):
@@ -2548,24 +2933,46 @@ class App:
         else:
             self.banner.configure(text="")
 
+        search = tk.Frame(self.frame, bg=CARD)
+        search.pack(fill="x", padx=8, pady=(0, 6))
+        self._filter_entry = tk.Entry(
+            search, textvariable=self.filter_var, bg=HOVER, fg=TEXT,
+            insertbackground=TEXT, relief="flat", font=(FONT, 9),
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=ACCENT)
+        self._filter_entry.pack(fill="x", ipady=4)
+        self._filter_entry.bind("<Escape>", lambda e: self.filter_var.set(""))
+
         tk.Label(self.frame, text="预设", bg=CARD, fg=MUTED,
                  font=(FONT, 8, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
-        if not presets:
+        query = self.filter_var.get().strip().lower()
+        tokens = [x for x in query.split() if x]
+        if tokens:
+            def _match(fn):
+                text = (NAME_MAP.get(fn, fn) + " " + fn).lower()
+                return all(tok in text for tok in tokens)
+            presets = [fn for fn in presets if _match(fn)]
+        if not presets and tokens:
+            tk.Label(self.frame, text="没有匹配「%s」的预设" % query,
+                     bg=CARD, fg=MUTED, font=(FONT, 9)).pack(
+                anchor="w", padx=4, pady=4)
+        elif not presets:
             tk.Label(self.frame, text="%s 下没有找到预设文件" % EQ_DIR,
                      bg=CARD, fg=RED, font=(FONT, 10)).pack(anchor="w", padx=4)
         else:
+            favorites = set(self.ui_state.get("favorites", []))
             groups = {}
             for fn in presets:
-                groups.setdefault(preset_group(fn), []).append(fn)
-            if "collapsed" not in self.ui_state:
-                self.ui_state["collapsed"] = sorted(groups)
-                save_ui_state(self.ui_state)
+                gname = FAVORITE_GROUP if fn in favorites else preset_group(fn)
+                groups.setdefault(gname, []).append(fn)
             collapsed = set(self.ui_state.get("collapsed", []))
-            groups = {}
-            for fn in presets:
-                groups.setdefault(preset_group(fn), []).append(fn)
-            order = [g for g in GROUP_ORDER if g in groups]
-            order += [g for g in groups if g not in GROUP_ORDER]
+            if tokens:
+                collapsed = set()
+            order = ([FAVORITE_GROUP] if FAVORITE_GROUP in groups else [])
+            order += [g for g in GROUP_ORDER
+                      if g in groups and g != FAVORITE_GROUP]
+            order += [g for g in groups
+                      if g not in order and g != FAVORITE_GROUP]
             for gname in order:
                 items = groups[gname]
                 expanded = gname not in collapsed
@@ -2574,7 +2981,7 @@ class App:
                                 fill="x", pady=(6, 0))
                 if expanded:
                     for fn in items:
-                        label = NAME_MAP.get(fn, fn)
+                        label = ("★ " if fn in favorites else "") + NAME_MAP.get(fn, fn)
                         PresetRow(self.frame, label, active == fn,
                                   lambda f=fn: self.apply(f), fn=fn,
                                   on_context=self._preset_menu).pack(
@@ -2585,6 +2992,14 @@ class App:
                          cursor="hand2").pack(anchor="w", padx=12, pady=(8, 2))
                 self.frame.winfo_children()[-1].bind(
                     "<Button-1>", lambda e: self._restore_hidden())
+
+        if getattr(self, "_keep_filter_focus", False) and self._filter_entry:
+            try:
+                self._filter_entry.focus_set()
+                self._filter_entry.icursor("end")
+            except Exception:
+                pass
+            self._keep_filter_focus = False
 
         self._update_status()
         self._update_analysis()
@@ -2622,6 +3037,18 @@ class App:
         except Exception:
             return False
 
+    def _prune_config_backups(self, keep=15):
+        try:
+            files = sorted(glob.glob(os.path.join(APO_DIR, "config.bak-*.txt")),
+                           key=os.path.getmtime, reverse=True)
+            for old in files[keep:]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
     def apply(self, fn):
         if not self.admin:
             messagebox.showwarning("需要管理员权限", "请点「以管理员重启」。")
@@ -2638,6 +3065,7 @@ class App:
                 bak = os.path.join(
                     APO_DIR, "config.bak-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
                 shutil.copy2(CFG, bak)
+                self._prune_config_backups()
             lines = [
                 "# 由 EQ 切换器生成 %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
                 "# 当前配置: %s" % NAME_MAP.get(fn, fn),
@@ -2673,6 +3101,7 @@ class App:
                 bak = os.path.join(
                     APO_DIR, "config.bak-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
                 shutil.copy2(CFG, bak)
+                self._prune_config_backups()
             with open(CFG, "w", encoding="utf-8") as fh:
                 fh.write("# EQ 已关闭（由切换器）\n\n")
         except Exception as exc:
@@ -2732,339 +3161,7 @@ def main():
     if not os.path.isdir(APO_DIR):
         return _offer_install()
 
-    root = tk.Tk()
-    try:
-        App(root)
-    except Exception as exc:  # noqa: BLE001
-        messagebox.showerror("启动失败", "%s\n\n%s" % (type(exc).__name__, exc))
-        root.destroy()
-        return 1
-    if "--selftest" in sys.argv:
-        root.update()
-        print("selftest ok: presets=%d admin=%s" % (
-            len(discover()), is_admin()))
-        root.destroy()
-        return 0
-    root.mainloop()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-    def _hide_preset(self, fn):
-        hidden = self.ui_state.setdefault("hidden", [])
-        if fn not in hidden:
-            hidden.append(fn)
-            save_ui_state(self.ui_state)
-        self.build()
-
-    def _restore_hidden(self):
-        self.ui_state["hidden"] = []
-        save_ui_state(self.ui_state)
-        self.build()
-
-    def _delete_preset(self, fn):
-        path = os.path.join(EQ_DIR, fn)
-        if not os.path.isfile(path):
-            return
-        if not messagebox.askyesno(
-                "删除预设",
-                "把「%s」移到回收站？\n\n文件：%s" % (NAME_MAP.get(fn, fn), path)):
-            return
-        try:
-            _recycle(path)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("删除失败", str(exc))
-            return
-        hidden = self.ui_state.setdefault("hidden", [])
-        if fn in hidden:
-            hidden.remove(fn)
-            save_ui_state(self.ui_state)
-        if self.read_active() == fn and self.admin:
-            self.bypass()
-        self.build()
-
-    def _on_wheel(self, event):
-        try:
-            widget = self.root.winfo_containing(event.x_root, event.y_root)
-        except Exception:
-            widget = None
-        if widget is None:
-            return
-        parent = widget
-        inside = False
-        while parent is not None:
-            if parent is self.list_canvas:
-                inside = True
-                break
-            parent = getattr(parent, "master", None)
-        if inside:
-            self.list_canvas.yview_scroll(int(-event.delta / 120), "units")
-
-    def _draw_analysis(self):
-        c = self.graph
-        if c is None:
-            return
-        c.delete("all")
-        w = c.winfo_width() or 360
-        h = c.winfo_height() or 300
-        c.create_rectangle(0, 0, w, h, fill=CARD, outline="", tags="abg")
-        left, right, top, bottom = 6, 26, 8, 18
-        plotw = max(60, w - left - right)
-        ploth = max(60, h - top - bottom)
-        lo, hi = 20.0, 20000.0
-
-        def x_of(f):
-            return left + (math.log10(f) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * plotw
-
-        def y_of(db):
-            return top + (40 - db) / 100.0 * ploth
-
-        for db in range(-60, 41, 10):
-            yy = y_of(db)
-            c.create_line(left, yy, left + plotw, yy, fill=GRID, tags="agrid")
-            c.create_text(left + plotw + 3, yy, text=str(db), anchor="w",
-                          fill=MUTED, font=(FONT, 7), tags="agrid")
-        for f in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
-            xx = x_of(f)
-            c.create_line(xx, top, xx, top + ploth, fill=GRID, tags="agrid")
-            label = ("%dk" % (f // 1000)) if f >= 1000 else str(f)
-            c.create_text(xx, top + ploth + 2, text=label, anchor="n",
-                          fill=MUTED, font=(FONT, 7), tags="agrid")
-        c.create_line(left, y_of(0), left + plotw, y_of(0), fill=AXIS, tags="aaxis")
-        curve = getattr(self, "_curve", None)
-        if curve:
-            freqs, dbs = curve
-            pts = []
-            for f, db in zip(freqs, dbs):
-                pts.extend([x_of(f), y_of(max(-60, min(40, db)))])
-            c.create_line(*pts, fill=ACCENT, width=2, tags="acurve")
-
-    def _update_analysis(self):
-        include = self.read_active()
-        if include:
-            path = os.path.join(EQ_DIR, include)
-            if os.path.isfile(path):
-                preamp, filters, graphic = parse_preset(path)
-            else:
-                preamp, filters, graphic = 0.0, [], []
-            freqs, dbs = response_curve(preamp, filters, graphic)
-            self._curve = (freqs, dbs)
-            peak = max(dbs) if dbs else 0.0
-            self.stat_peak.configure(text="峰值增益  %+.1f dB" % peak,
-                                     fg=RED if peak > 0 else TEXT)
-            self.stat_filters.configure(text="滤波器  %d 个" % len(filters))
-            self.stat_preamp.configure(text="预增益  %+.1f dB" % preamp)
-        else:
-            freqs, dbs = response_curve(0.0, [])
-            self._curve = (freqs, dbs)
-            self.stat_peak.configure(text="峰值增益  —", fg=TEXT)
-            self.stat_filters.configure(text="滤波器  —")
-            self.stat_preamp.configure(text="预增益  —")
-        self._draw_analysis()
-
-    def build(self):
-        if getattr(self, "_animating", False):
-            self._pending_build = True
-            return
-        for w in self.frame.winfo_children():
-            w.destroy()
-
-        hidden = set(self.ui_state.get("hidden", []))
-        presets = [fn for fn in discover() if fn not in hidden]
-        active = self.read_active()
-
-        if not self.admin:
-            self.banner.configure(
-                text="当前为普通模式：只能查看，不能切换。点右下角「以管理员重启」。")
-        else:
-            self.banner.configure(text="")
-
-        tk.Label(self.frame, text="预设", bg=CARD, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
-        if not presets:
-            tk.Label(self.frame, text="%s 下没有找到预设文件" % EQ_DIR,
-                     bg=CARD, fg=RED, font=(FONT, 10)).pack(anchor="w", padx=4)
-        else:
-            groups = {}
-            for fn in presets:
-                groups.setdefault(preset_group(fn), []).append(fn)
-            if "collapsed" not in self.ui_state:
-                self.ui_state["collapsed"] = sorted(groups)
-                save_ui_state(self.ui_state)
-            collapsed = set(self.ui_state.get("collapsed", []))
-            groups = {}
-            for fn in presets:
-                groups.setdefault(preset_group(fn), []).append(fn)
-            order = [g for g in GROUP_ORDER if g in groups]
-            order += [g for g in groups if g not in GROUP_ORDER]
-            for gname in order:
-                items = groups[gname]
-                expanded = gname not in collapsed
-                GroupHeader(self.frame, gname, len(items), expanded,
-                            lambda gg=gname: self._toggle_group(gg)).pack(
-                                fill="x", pady=(6, 0))
-                if expanded:
-                    for fn in items:
-                        label = NAME_MAP.get(fn, fn)
-                        PresetRow(self.frame, label, active == fn,
-                                  lambda f=fn: self.apply(f), fn=fn,
-                                  on_context=self._preset_menu).pack(
-                                      fill="x", padx=14, pady=1)
-            if hidden:
-                tk.Label(self.frame, text="已隐藏 %d 个 · 点此恢复" % len(hidden),
-                         bg=CARD, fg=MUTED, font=(FONT, 8),
-                         cursor="hand2").pack(anchor="w", padx=12, pady=(8, 2))
-                self.frame.winfo_children()[-1].bind(
-                    "<Button-1>", lambda e: self._restore_hidden())
-
-        self._update_status()
-        self._update_analysis()
-
-    def _update_status(self):
-        active = self.read_active()
-        dev_label = self.device_combo.get()
-        dev_suffix = "" if dev_label.startswith("全部") else "  ·  " + dev_label
-        if active:
-            self.status.configure(
-                text="当前生效：%s%s" % (NAME_MAP.get(active, active), dev_suffix),
-                fg=ACCENT)
-        else:
-            self.status.configure(
-                text="当前生效：EQ 已关闭（bypass）" + dev_suffix, fg=MUTED)
-
-    def preview_preset(self, text):
-        if not self.admin:
-            return False
-        try:
-            name = "_peq_preview.txt"
-            with open(os.path.join(APO_DIR, name), "w", encoding="utf-8") as fh:
-                fh.write(text)
-            bak = os.path.join(APO_DIR, "config.peq-preview.bak")
-            if os.path.exists(CFG) and not os.path.exists(bak):
-                shutil.copy2(CFG, bak)
-            lines = ["# PEQ 编辑器实时预览 %s" % time.strftime("%H:%M:%S")]
-            pattern = self.device_pattern()
-            if pattern:
-                lines.append("Device: %s" % pattern)
-            lines += ["", "Include: %s" % name, ""]
-            with open(CFG, "w", encoding="utf-8") as fh:
-                fh.write("\n".join(lines))
-            return True
-        except Exception:
-            return False
-
-    def apply(self, fn):
-        if not self.admin:
-            messagebox.showwarning("需要管理员权限", "请点「以管理员重启」。")
-            return
-        src = os.path.join(EQ_DIR, fn)
-        dst = os.path.join(APO_DIR, fn)
-        if not os.path.isfile(src):
-            messagebox.showerror("预设不存在", "找不到预设文件：\n%s" % src)
-            return
-        try:
-            if os.path.abspath(src) != os.path.abspath(dst):
-                shutil.copy2(src, dst)
-            if os.path.exists(CFG):
-                bak = os.path.join(
-                    APO_DIR, "config.bak-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-                shutil.copy2(CFG, bak)
-            lines = [
-                "# 由 EQ 切换器生成 %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
-                "# 当前配置: %s" % NAME_MAP.get(fn, fn),
-            ]
-            pattern = self.device_pattern()
-            if pattern:
-                lines.append("# 作用设备: %s" % self.device_combo.get())
-                lines.append("Device: %s" % pattern)
-            lines += ["", "Include: %s" % fn, ""]
-            if getattr(self, "volume_match", False):
-                try:
-                    preamp, filters, graphic = parse_preset(src)
-                    comp = estimate_compensation(preamp, filters, graphic)
-                    if abs(comp) >= 0.1:
-                        lines.append("Preamp: %+.1f dB" % comp)
-                        lines.append("# 音量匹配补偿 %+.1f dB" % comp)
-                except Exception:
-                    pass
-            content = "\n".join(lines)
-            with open(CFG, "w", encoding="utf-8") as fh:
-                fh.write(content)
-        except Exception as exc:
-            messagebox.showerror("切换失败", str(exc))
-            return
-        self.build()
-
-    def bypass(self):
-        if not self.admin:
-            messagebox.showwarning("需要管理员权限", "请点「以管理员重启」。")
-            return
-        try:
-            if os.path.exists(CFG):
-                bak = os.path.join(
-                    APO_DIR, "config.bak-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-                shutil.copy2(CFG, bak)
-            with open(CFG, "w", encoding="utf-8") as fh:
-                fh.write("# EQ 已关闭（由切换器）\n\n")
-        except Exception as exc:
-            messagebox.showerror("关闭失败", str(exc))
-            return
-        self.build()
-
-
-def find_installer():
-    for d in (os.path.join(base_dir(), "installer"), base_dir()):
-        if not os.path.isdir(d):
-            continue
-        for name in os.listdir(d):
-            low = name.lower()
-            if low.startswith("equalizerapo") and low.endswith(".exe"):
-                return os.path.join(d, name)
-    return None
-
-
-def _offer_install():
-    inst = find_installer()
-    if inst:
-        ans = messagebox.askyesno(
-            "未安装 Equalizer APO",
-            "没有检测到 Equalizer APO。\n\n"
-            "找到一个安装包：\n%s\n\n是否现在运行安装程序？\n"
-            "（安装时勾选你的输出设备，完成后重启）" % inst)
-        if ans:
-            try:
-                os.startfile(inst)
-            except Exception as exc:  # noqa: BLE001
-                messagebox.showerror("启动安装失败", str(exc))
-    else:
-        ans = messagebox.askyesno(
-            "未安装 Equalizer APO",
-            "没有检测到 Equalizer APO。\n\n"
-            "是否打开官方下载页？\n"
-            "下载后放进安装程序所在的 installer 文件夹，"
-            "重新运行本程序即可自动引导安装。")
-        if ans:
-            webbrowser.open("https://sourceforge.net/projects/equalizerapo/files/")
-    return 1
-
-
-def main():
-    global APO_DIR, CFG
-    if not os.path.isdir(APO_DIR):
-        picked = filedialog.askopenfilename(
-            title="选择 Equalizer APO 的 config.txt（可取消）",
-            filetypes=[("config.txt", "config.txt"), ("文本文件", "*.txt")])
-        if picked:
-            APO_DIR = os.path.dirname(picked)
-            CFG = os.path.join(APO_DIR, "config.txt")
-            save_apo_dir(APO_DIR)
-        else:
-            return _offer_install()
-    if not os.path.isdir(APO_DIR):
-        return _offer_install()
-
-    root = tk.Tk()
+    root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
     try:
         App(root)
     except Exception as exc:  # noqa: BLE001
