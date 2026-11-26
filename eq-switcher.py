@@ -142,6 +142,8 @@ NAME_MAP = {
     "hd490pro-valorant-hrtf.txt": "490 Pro 打瓦·HRTF 补偿版",
     "hd490pro-sim-dt700.txt": "490 Pro 模拟 DT 700（厚低频）",
     "hd490pro-sim-hd800s.txt": "490 Pro 模拟 HD 800S（6k峰）",
+    "hd490pro-air.txt": "490 Pro 空气感 · 解析增强",
+    "hd490pro-air-lite.txt": "490 Pro 空气感 · 纯高频测试",
     "dt700.txt": "DT 700 Pro X 听歌",
     "h6air-harman.txt": "H6 Air · Harman 目标（参数）",
     "h6air-graphic.txt": "H6 Air · Harman 目标（图形）",
@@ -149,7 +151,7 @@ NAME_MAP = {
 
 GROUP_ORDER = ["HD 490 PRO", "DT 700 Pro X", "Sony INZONE H6 Air", "其他"]
 FAVORITE_GROUP = "★ 收藏"
-APP_VERSION = "v2.0.2"
+APP_VERSION = "v2.0.3"
 COMPARE_COLORS = ["#7c3aed", "#2f9e6e", "#d97706"]
 UPDATE_API = "https://api.github.com/repos/Mavic-png/eq-switcher/releases/latest"
 
@@ -786,6 +788,9 @@ def load_opra_database(path=None):
     return vendors, products, eqs
 
 
+CFG_BEGIN = "# >>> EQ-Switcher managed block"
+CFG_END = "# <<< EQ-Switcher managed block"
+
 OPRA_URLS = (
     "https://opra.roonlabs.net/database_v1.jsonl",
     "http://opra.roonlabs.net/database_v1.jsonl",
@@ -878,11 +883,20 @@ def save_ui_state(data):
         pass
 
 
-def parse_preset(path):
-    """解析 Equalizer APO 预设，返回 (preamp, filters)。"""
+def parse_preset(path, _visited=None):
+    """解析 Equalizer APO 预设，返回 (preamp, filters, graphic)。"""
     preamp = 0.0
     filters = []
     graphic = []
+    if _visited is None:
+        _visited = set()
+    try:
+        real = os.path.abspath(path)
+    except Exception:
+        real = path
+    if real in _visited:
+        return preamp, filters, graphic
+    _visited.add(real)
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             for line in fh:
@@ -896,9 +910,10 @@ def parse_preset(path):
                     name = s.split(":", 1)[1].strip()
                     sub = os.path.join(EQ_DIR, name)
                     if os.path.isfile(sub):
-                        p2, f2 = parse_preset(sub)
+                        p2, f2, g2 = parse_preset(sub, _visited)
                         preamp += p2
                         filters.extend(f2)
+                        graphic.extend(g2)
                 elif low.startswith("filter"):
                     m = re.match(r"filter\s*\d*\s*:\s*(on|off)\s+(\w+)\s*(.*)", s, re.I)
                     if not m or m.group(1).lower() == "off":
@@ -1102,17 +1117,38 @@ def list_output_devices():
 def read_config_state():
     device = None
     include = None
+    block_device = None
+    block_include = None
+    in_block = False
+    block_seen = False
     try:
         with open(CFG, "r", encoding="utf-8", errors="ignore") as fh:
             for line in fh:
                 s = line.strip()
+                if s == CFG_BEGIN:
+                    in_block = True
+                    block_seen = True
+                    continue
+                if s == CFG_END:
+                    in_block = False
+                    continue
                 low = s.lower()
                 if low.startswith("device:"):
-                    device = s.split(":", 1)[1].strip()
+                    value = s.split(":", 1)[1].strip()
+                    if in_block:
+                        block_device = value
+                    else:
+                        device = value
                 elif low.startswith("include:"):
-                    include = s.split(":", 1)[1].strip()
+                    value = s.split(":", 1)[1].strip()
+                    if in_block:
+                        block_include = value
+                    else:
+                        include = value
     except Exception:
         pass
+    if block_seen:
+        return block_device or device, block_include
     return device, include
 
 
@@ -1130,6 +1166,7 @@ class PeqEditor(tk.Toplevel):
         self.target_fn = target_fn
         self.previewing = False
         self.restore_fn = None
+        self._config_snapshot = None
         self._preview_job = None
         self.filters = []
         self.graphic = []
@@ -1510,6 +1547,7 @@ class PeqEditor(tk.Toplevel):
                 self.preview_toggle._draw()
                 return
             self.restore_fn = getattr(self.app, "active_fn", None)
+            self._config_snapshot = self.app.capture_config()
             self.previewing = True
             self._push_preview()
         else:
@@ -1533,6 +1571,7 @@ class PeqEditor(tk.Toplevel):
         ok = self.app.preview_preset(self._serialize())
         if not ok:
             self.previewing = False
+            self._restore()
             self.preview_toggle.value = False
             self.preview_toggle._draw()
 
@@ -1540,6 +1579,10 @@ class PeqEditor(tk.Toplevel):
         if not self.app:
             return
         try:
+            if self._config_snapshot is not None:
+                self.app.restore_config(self._config_snapshot)
+                self._config_snapshot = None
+                return
             if self.restore_fn:
                 self.app.apply(self.restore_fn)
             else:
@@ -1548,8 +1591,9 @@ class PeqEditor(tk.Toplevel):
             pass
 
     def _close(self):
-        self.previewing = False
-        self._restore()
+        if self.previewing:
+            self.previewing = False
+            self._restore()
         self.destroy()
 
     def _ask_name(self, initial=None):
@@ -2368,7 +2412,10 @@ class App:
         for w in list(self.root.winfo_children()):
             if isinstance(w, tk.Toplevel):
                 try:
-                    w.destroy()
+                    if isinstance(w, PeqEditor):
+                        w._close()
+                    else:
+                        w.destroy()
                 except Exception:
                     pass
         try:
@@ -2601,18 +2648,23 @@ class App:
             return
         added = 0
         skipped = 0
+        total_bytes = 0
         try:
             with zipfile.ZipFile(path) as zf:
                 for info in zf.infolist():
                     if not info.filename.lower().endswith(".txt"):
                         continue
+                    if info.file_size > 2 * 1024 * 1024:
+                        skipped += 1
+                        continue
+                    total_bytes += info.file_size
+                    if total_bytes > 50 * 1024 * 1024:
+                        skipped += 1
+                        continue
                     name = safe_preset_name(
                         os.path.splitext(os.path.basename(info.filename))[0],
                         "imported") + ".txt"
                     data = zf.read(info)
-                    if len(data) > 2 * 1024 * 1024:
-                        skipped += 1
-                        continue
                     dst = os.path.join(EQ_DIR, name)
                     if os.path.exists(dst):
                         base, ext = os.path.splitext(name)
@@ -2659,8 +2711,17 @@ class App:
             name = os.path.basename(src)
             dst = os.path.join(EQ_DIR, name)
             try:
-                if os.path.abspath(src) != os.path.abspath(dst):
-                    shutil.copy2(src, dst)
+                if os.path.abspath(src) == os.path.abspath(dst):
+                    skipped += 1
+                    continue
+                if os.path.exists(dst):
+                    base, ext = os.path.splitext(name)
+                    n = 2
+                    while os.path.exists(os.path.join(
+                            EQ_DIR, "%s-%d%s" % (base, n, ext))):
+                        n += 1
+                    dst = os.path.join(EQ_DIR, "%s-%d%s" % (base, n, ext))
+                shutil.copy2(src, dst)
                 added += 1
             except Exception:  # noqa: BLE001
                 skipped += 1
@@ -2883,7 +2944,9 @@ class App:
     def _update_analysis(self):
         include = self.read_active()
         if include:
-            path = os.path.join(EQ_DIR, include)
+            path = os.path.join(APO_DIR, include)
+            if not os.path.isfile(path):
+                path = os.path.join(EQ_DIR, include)
             if os.path.isfile(path):
                 preamp, filters, graphic = parse_preset(path)
             else:
@@ -2926,6 +2989,7 @@ class App:
         hidden = set(self.ui_state.get("hidden", []))
         presets = [fn for fn in discover() if fn not in hidden]
         active = self.read_active()
+        self.active_fn = active
 
         if not self.admin:
             self.banner.configure(
@@ -3016,6 +3080,74 @@ class App:
             self.status.configure(
                 text="当前生效：EQ 已关闭（bypass）" + dev_suffix, fg=MUTED)
 
+    def _backup_config(self):
+        if not os.path.exists(CFG):
+            return
+        try:
+            bak = os.path.join(
+                APO_DIR, "config.bak-%s.txt"
+                % time.strftime("%Y%m%d-%H%M%S-%f"))
+            shutil.copy2(CFG, bak)
+            self._prune_config_backups()
+        except Exception:
+            pass
+
+    def capture_config(self):
+        try:
+            with open(CFG, "r", encoding="utf-8", errors="ignore") as fh:
+                return fh.read()
+        except Exception:
+            return None
+
+    def restore_config(self, text):
+        if text is None:
+            return False
+        try:
+            with open(CFG, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return True
+        except Exception:
+            return False
+
+    def _strip_managed(self, text):
+        stripped = text.lstrip()
+        if (stripped.startswith("# 由 EQ 切换器生成")
+                or stripped.startswith("# EQ 已关闭（由切换器）")):
+            return ""
+        out = []
+        in_block = False
+        for line in text.splitlines():
+            s = line.strip()
+            if s == CFG_BEGIN:
+                in_block = True
+                continue
+            if s == CFG_END:
+                in_block = False
+                continue
+            if not in_block:
+                out.append(line)
+        return "\n".join(out).rstrip()
+
+    def _write_managed(self, block_lines):
+        base = ""
+        try:
+            if os.path.exists(CFG):
+                with open(CFG, "r", encoding="utf-8", errors="ignore") as fh:
+                    base = fh.read()
+        except Exception:
+            base = ""
+        base = self._strip_managed(base)
+        parts = []
+        if base:
+            parts.append(base + "\n")
+        if block_lines:
+            parts.append(CFG_BEGIN + "\n")
+            parts.extend(line + "\n" for line in block_lines)
+            parts.append(CFG_END + "\n")
+        content = "\n".join(parts).strip() + "\n"
+        with open(CFG, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
     def preview_preset(self, text):
         if not self.admin:
             return False
@@ -3023,16 +3155,12 @@ class App:
             name = "_peq_preview.txt"
             with open(os.path.join(APO_DIR, name), "w", encoding="utf-8") as fh:
                 fh.write(text)
-            bak = os.path.join(APO_DIR, "config.peq-preview.bak")
-            if os.path.exists(CFG) and not os.path.exists(bak):
-                shutil.copy2(CFG, bak)
             lines = ["# PEQ 编辑器实时预览 %s" % time.strftime("%H:%M:%S")]
             pattern = self.device_pattern()
             if pattern:
                 lines.append("Device: %s" % pattern)
-            lines += ["", "Include: %s" % name, ""]
-            with open(CFG, "w", encoding="utf-8") as fh:
-                fh.write("\n".join(lines))
+            lines.append("Include: %s" % name)
+            self._write_managed(lines)
             return True
         except Exception:
             return False
@@ -3061,11 +3189,7 @@ class App:
         try:
             if os.path.abspath(src) != os.path.abspath(dst):
                 shutil.copy2(src, dst)
-            if os.path.exists(CFG):
-                bak = os.path.join(
-                    APO_DIR, "config.bak-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-                shutil.copy2(CFG, bak)
-                self._prune_config_backups()
+            self._backup_config()
             lines = [
                 "# 由 EQ 切换器生成 %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
                 "# 当前配置: %s" % NAME_MAP.get(fn, fn),
@@ -3074,7 +3198,7 @@ class App:
             if pattern:
                 lines.append("# 作用设备: %s" % self.device_combo.get())
                 lines.append("Device: %s" % pattern)
-            lines += ["", "Include: %s" % fn, ""]
+            lines.append("Include: %s" % fn)
             if getattr(self, "volume_match", False):
                 try:
                     preamp, filters, graphic = parse_preset(src)
@@ -3084,9 +3208,7 @@ class App:
                         lines.append("# 音量匹配补偿 %+.1f dB" % comp)
                 except Exception:
                     pass
-            content = "\n".join(lines)
-            with open(CFG, "w", encoding="utf-8") as fh:
-                fh.write(content)
+            self._write_managed(lines)
         except Exception as exc:
             messagebox.showerror("切换失败", str(exc))
             return
@@ -3097,13 +3219,8 @@ class App:
             messagebox.showwarning("需要管理员权限", "请点「以管理员重启」。")
             return
         try:
-            if os.path.exists(CFG):
-                bak = os.path.join(
-                    APO_DIR, "config.bak-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-                shutil.copy2(CFG, bak)
-                self._prune_config_backups()
-            with open(CFG, "w", encoding="utf-8") as fh:
-                fh.write("# EQ 已关闭（由切换器）\n\n")
+            self._backup_config()
+            self._write_managed(["# EQ 已关闭（由切换器）"])
         except Exception as exc:
             messagebox.showerror("关闭失败", str(exc))
             return
