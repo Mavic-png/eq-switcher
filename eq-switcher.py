@@ -151,8 +151,8 @@ NAME_MAP = {
 
 GROUP_ORDER = ["HD 490 PRO", "DT 700 Pro X", "Sony INZONE H6 Air", "其他"]
 FAVORITE_GROUP = "★ 收藏"
-APP_VERSION = "v2.0.3"
-COMPARE_COLORS = ["#7c3aed", "#2f9e6e", "#d97706"]
+APP_VERSION = "v2.1.0"
+COMPARE_COLORS = ["#a78bfa", "#34d399", "#f59e0b"]
 UPDATE_API = "https://api.github.com/repos/Mavic-png/eq-switcher/releases/latest"
 
 
@@ -166,26 +166,26 @@ def preset_group(fn):
         return "Sony INZONE H6 Air"
     return "其他"
 
-# ---- RVC STUDIO 风格配色 ----
+# ---- 现代卡片风格配色 ----
 LIGHT = {
-    "BG": "#eef1f6", "CARD": "#ffffff", "BORDER": "#e3e8f0",
-    "TEXT": "#16233d", "MUTED": "#7b8496", "ACCENT": "#2f5bea",
-    "ACCENT_DARK": "#2448c9", "ACCENT_SOFT": "#eaf0ff",
-    "GREEN": "#1f9d55", "RED": "#d64545", "HOVER": "#f6f8fc",
-    "ORANGE": "#b45309", "ORANGE_SOFT": "#fff7ed",
-    "GRID": "#eef1f6", "AXIS": "#d9dee8",
-    "DANGER_BG": "#fff5f5", "DANGER_HOVER": "#ffecec",
-    "DANGER_BORDER": "#f3c7c7", "WHITE": "#ffffff",
+    "BG": "#f3f5f9", "CARD": "#ffffff", "BORDER": "#dde3ee",
+    "TEXT": "#141d2e", "MUTED": "#64748b", "ACCENT": "#2563eb",
+    "ACCENT_DARK": "#1d4ed8", "ACCENT_SOFT": "#e8f0fe",
+    "GREEN": "#16a34a", "RED": "#dc2626", "HOVER": "#f1f5f9",
+    "ORANGE": "#b45309", "ORANGE_SOFT": "#fef3c7",
+    "GRID": "#edf1f7", "AXIS": "#cbd5e1",
+    "DANGER_BG": "#fef2f2", "DANGER_HOVER": "#fee2e2",
+    "DANGER_BORDER": "#fecaca", "WHITE": "#ffffff",
 }
 DARK = {
-    "BG": "#10151d", "CARD": "#1a2230", "BORDER": "#2a3445",
-    "TEXT": "#e7edf7", "MUTED": "#8c9ab0", "ACCENT": "#5b8cff",
-    "ACCENT_DARK": "#7aa2ff", "ACCENT_SOFT": "#1d2c4a",
-    "GREEN": "#2fbf71", "RED": "#ff6b6b", "HOVER": "#222d3f",
-    "ORANGE": "#f0a35e", "ORANGE_SOFT": "#3a2a1c",
-    "GRID": "#2f3d52", "AXIS": "#465a78",
-    "DANGER_BG": "#3a1f22", "DANGER_HOVER": "#4a2428",
-    "DANGER_BORDER": "#6b3a3f", "WHITE": "#ffffff",
+    "BG": "#0d1117", "CARD": "#161b22", "BORDER": "#30363d",
+    "TEXT": "#e6edf3", "MUTED": "#8b949e", "ACCENT": "#4f8cff",
+    "ACCENT_DARK": "#6ca0ff", "ACCENT_SOFT": "#1c2d4a",
+    "GREEN": "#3fb950", "RED": "#f85149", "HOVER": "#21262d",
+    "ORANGE": "#e3b341", "ORANGE_SOFT": "#2d2312",
+    "GRID": "#242c37", "AXIS": "#485466",
+    "DANGER_BG": "#2d1619", "DANGER_HOVER": "#3d1d21",
+    "DANGER_BORDER": "#6e2c32", "WHITE": "#ffffff",
 }
 PALETTE = LIGHT
 BG = LIGHT["BG"]
@@ -332,7 +332,7 @@ def rounded_rect(canvas, x1, y1, x2, y2, r, **kw):
 
 
 class RoundedButton(tk.Canvas):
-    def __init__(self, parent, text, command, kind="ghost", width=110, height=34):
+    def __init__(self, parent, text, command, kind="ghost", width=104, height=34):
         bg = parent.cget("bg") if isinstance(parent, tk.Frame) else BG
         super().__init__(parent, width=width, height=height, bg=bg,
                          highlightthickness=0, bd=0, cursor="hand2")
@@ -359,16 +359,19 @@ class RoundedButton(tk.Canvas):
         else:
             fill = CARD if not self._hover else HOVER
             text = TEXT
-            outline = BORDER
+            outline = ACCENT if self._hover else BORDER
         return fill, text, outline
 
     def _draw(self):
         self.delete("all")
+        w = max(self.bw, self.winfo_width()) if self.winfo_width() > 2 else self.bw
+        h = max(self.bh, self.winfo_height()) if self.winfo_height() > 2 else self.bh
         fill, text, outline = self._palette()
-        rounded_rect(self, 1, 1, self.bw - 1, self.bh - 1, 9,
+        rounded_rect(self, 1, 1, w - 1, h - 1, 9,
                      fill=fill, outline=outline)
-        self.create_text(self.bw / 2, self.bh / 2, text=self.text,
-                         fill=text, font=(FONT, 9))
+        weight = "bold" if self.kind == "primary" else "normal"
+        self.create_text(w / 2, h / 2, text=self.text,
+                         fill=text, font=(FONT, 9, weight))
 
     def _on_enter(self, _e):
         self._hover = True
@@ -377,6 +380,80 @@ class RoundedButton(tk.Canvas):
     def _on_leave(self, _e):
         self._hover = False
         self._draw()
+
+
+class SlimScrollbar(tk.Canvas):
+    """细长圆角自定义滚动条，完美适配深色/浅色主题。"""
+
+    def __init__(self, parent, command, width=10):
+        bg = parent.cget("bg") if isinstance(parent, tk.Frame) else CARD
+        super().__init__(parent, width=width, bg=bg,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.command = command
+        self._first = 0.0
+        self._last = 1.0
+        self._hover = False
+        self._drag_y = None
+        self._drag_first = 0.0
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag_y", None))
+
+    def _set_hover(self, val):
+        self._hover = val
+        self._draw()
+
+    def set(self, first, last):
+        self._first = max(0.0, min(1.0, float(first)))
+        self._last = max(0.0, min(1.0, float(last)))
+        self._draw()
+
+    def _thumb_coords(self):
+        h = max(20, self.winfo_height())
+        span = max(0.08, self._last - self._first)
+        th = max(28, int(h * span))
+        avail = max(1, h - th)
+        frac = self._first / max(1e-6, 1.0 - (self._last - self._first))
+        y1 = int(max(0.0, min(1.0, frac)) * avail)
+        return y1 + 2, y1 + th - 2
+
+    def _draw(self):
+        self.delete("all")
+        try:
+            self.configure(bg=self.master.cget("bg"))
+        except Exception:
+            pass
+        if self._first <= 0.0 and self._last >= 1.0:
+            return
+        w = max(8, self.winfo_width())
+        y1, y2 = self._thumb_coords()
+        color = MUTED if self._hover or self._drag_y is not None else BORDER
+        rounded_rect(self, 2, y1, w - 2, y2, 3, fill=color, outline=color)
+
+    def _on_press(self, event):
+        if self._first <= 0.0 and self._last >= 1.0:
+            return
+        y1, y2 = self._thumb_coords()
+        if y1 <= event.y <= y2:
+            self._drag_y = event.y
+            self._drag_first = self._first
+        else:
+            h = max(1, self.winfo_height())
+            span = self._last - self._first
+            target = max(0.0, min(1.0 - span, event.y / h - span / 2.0))
+            self.command("moveto", target)
+
+    def _on_drag(self, event):
+        if self._drag_y is None:
+            return
+        h = max(1, self.winfo_height())
+        dy = event.y - self._drag_y
+        span = self._last - self._first
+        target = max(0.0, min(1.0 - span, self._drag_first + dy / h))
+        self.command("moveto", target)
 
 
 class DeviceSelector(tk.Canvas):
@@ -390,8 +467,15 @@ class DeviceSelector(tk.Canvas):
         self.value = self.options[0]
         self.on_change = None
         self._pop = None
+        self._hover = False
         self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
         self.bind("<Button-1>", self._open)
+        self._draw()
+
+    def _set_hover(self, val):
+        self._hover = val
         self._draw()
 
     def get(self):
@@ -412,56 +496,76 @@ class DeviceSelector(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
-        rounded_rect(self, 1, 1, self.bw - 1, self.bh - 1, 9,
-                     fill=CARD, outline=BORDER)
+        w = self.winfo_width() if self.winfo_width() > 2 else self.bw
+        h = self.winfo_height() if self.winfo_height() > 2 else self.bh
+        outline = ACCENT if self._hover or self._pop is not None else BORDER
+        rounded_rect(self, 1, 1, w - 1, h - 1, 9,
+                     fill=CARD, outline=outline)
+        max_chars = max(14, int((w - 36) / 8.5))
         text = self.value
-        if len(text) > 26:
-            text = text[:25] + "…"
-        self.create_text(12, self.bh / 2, text=text, anchor="w",
+        if len(text) > max_chars:
+            text = text[:max_chars - 1] + "…"
+        self.create_text(12, h / 2, text=text, anchor="w",
                          fill=TEXT, font=(FONT, 9))
-        self.create_text(self.bw - 14, self.bh / 2, text="▾", anchor="e",
+        self.create_text(w - 12, h / 2, text="▾", anchor="e",
                          fill=MUTED, font=(FONT, 9))
 
     def _open(self, _e=None):
-        self._close_popup()
+        if self._pop is not None:
+            self._close_popup()
+            return
         top = tk.Toplevel(self)
         top.overrideredirect(True)
         top.configure(bg=BORDER)
         frame = tk.Frame(top, bg=CARD)
         frame.pack(padx=1, pady=1, fill="both", expand=True)
         for opt in self.options:
-            lbl = tk.Label(frame, text=opt, anchor="w", bg=CARD, fg=TEXT,
-                           font=(FONT, 9), padx=14, pady=6, cursor="hand2")
+            selected = (opt == self.value)
+            bg = ACCENT_SOFT if selected else CARD
+            fg = ACCENT if selected else TEXT
+            lbl = tk.Label(frame, text=("✓ " if selected else "   ") + opt,
+                           anchor="w", bg=bg, fg=fg,
+                           font=(FONT, 9, "bold" if selected else "normal"),
+                           padx=12, pady=6, cursor="hand2")
             lbl.pack(fill="x")
-            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=ACCENT_SOFT))
-            lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=CARD))
+            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=ACCENT_SOFT, fg=ACCENT))
+            lbl.bind("<Leave>", lambda e, l=lbl, b=bg, f=fg: l.configure(bg=b, fg=f))
             lbl.bind("<Button-1>", lambda e, o=opt: self._choose(o))
         top.update_idletasks()
+        w = max(self.winfo_width(), top.winfo_reqwidth())
+        h = top.winfo_reqheight()
         x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.bh + 2
+        y = self.winfo_rooty() + self.winfo_height() + 3
         top.attributes("-topmost", True)
-        top.geometry("+%d+%d" % (x, y))
+        top.geometry("%dx%d+%d+%d" % (w, h, x, y))
         top.update()
         top.lift()
         top.focus_force()
         top.bind("<FocusOut>", lambda e: self._close_popup())
         top.bind("<Escape>", lambda e: self._close_popup())
         self._pop = top
+        self._draw()
 
     def _choose(self, value):
         self.value = value
-        self._draw()
         self._close_popup()
+        self._draw()
         if self.on_change:
             self.on_change()
 
     def _close_popup(self):
-        if self._pop is not None:
+        pop = self._pop
+        self._pop = None
+        if pop is not None:
             try:
-                self._pop.destroy()
+                if pop.winfo_exists():
+                    pop.destroy()
             except tk.TclError:
                 pass
-            self._pop = None
+        try:
+            self._draw()
+        except Exception:
+            pass
 
 
 class ToggleChip(tk.Canvas):
@@ -609,21 +713,21 @@ class ThemeSwitch(tk.Canvas):
         self.create_line(w / 2, 5, w / 2, h - 5, fill=BORDER)
         sun_col = MUTED if self.value else ACCENT
         moon_col = ACCENT if self.value else MUTED
-        moon_bg = ACCENT if self.value else CARD
+        moon_bg = ACCENT_SOFT if self.value else CARD
         # 太阳
         sx, sy = w * 0.25, cy
         self.create_oval(sx - 3, sy - 3, sx + 3, sy + 3,
                          outline=sun_col, width=1.4)
-        for dx, dy in ((0, -7.5), (0, 7.5), (-7.5, 0), (7.5, 0),
-                       (-5.5, -5.5), (5.5, -5.5), (-5.5, 5.5), (5.5, 5.5)):
+        for dx, dy in ((0, -7), (0, 7), (-7, 0), (7, 0),
+                       (-5, -5), (5, -5), (-5, 5), (5, 5)):
             self.create_line(sx + dx * 0.62, sy + dy * 0.62,
-                             sx + dx, sy + dy, fill=sun_col, width=1)
-        # 月亮
+                             sx + dx, sy + dy, fill=sun_col, width=1.1)
+        # 月亮（用同色背景圆裁出月牙）
         mx, my = w * 0.75, cy
-        self.create_oval(mx - 4.5, my - 5, mx + 4.5, my + 5,
-                         outline=moon_col, width=1.4)
-        self.create_oval(mx - 0.5, my - 6, mx + 7.5, my + 4.5,
-                         outline=moon_bg, fill=moon_bg, width=0)
+        self.create_oval(mx - 5, my - 5, mx + 5, my + 5,
+                         fill=moon_col, outline=moon_col, width=0)
+        self.create_oval(mx - 1.5, my - 6.5, mx + 7.5, my + 3.5,
+                         fill=moon_bg, outline=moon_bg, width=0)
 
 
 class GroupHeader(tk.Canvas):
@@ -631,7 +735,7 @@ class GroupHeader(tk.Canvas):
 
     def __init__(self, parent, title, count, expanded, command):
         super().__init__(parent, bg=CARD, highlightthickness=0, bd=0,
-                         height=34, cursor="hand2")
+                         height=30, cursor="hand2")
         self.title = title
         self.count = count
         self.expanded = expanded
@@ -653,29 +757,35 @@ class GroupHeader(tk.Canvas):
     def _draw(self):
         self.delete("all")
         w = self.winfo_width() or 360
-        h = self.winfo_height() or 34
+        h = self.winfo_height() or 30
         fill = HOVER if self._hover else CARD
-        rounded_rect(self, 1, 2, w - 1, h - 2, 8, fill=fill, outline=fill)
+        rounded_rect(self, 2, 1, w - 2, h - 1, 7, fill=fill, outline=fill)
         arrow = "▾" if self.expanded else "▸"
-        self.create_text(12, h / 2, text=arrow, anchor="w",
+        self.create_text(10, h / 2, text=arrow, anchor="w",
                          fill=MUTED, font=(FONT, 8))
-        self.create_text(26, h / 2, text=self.title, anchor="w",
-                         fill=TEXT, font=(FONT, 9, "bold"))
-        self.create_text(w - 12, h / 2, text="%d" % self.count, anchor="e",
-                         fill=MUTED, font=(FONT, 8))
+        title_col = ORANGE if self.title == FAVORITE_GROUP else MUTED
+        self.create_text(24, h / 2, text=self.title, anchor="w",
+                         fill=title_col, font=(FONT, 8, "bold"))
+        badge_w = 24 if self.count < 10 else 30
+        rounded_rect(self, w - badge_w - 8, 6, w - 8, h - 6, 7,
+                     fill=HOVER, outline=BORDER)
+        self.create_text(w - 8 - badge_w / 2, h / 2, text="%d" % self.count,
+                         fill=MUTED, font=(FONT, 7, "bold"))
 
 
 class PresetRow(tk.Canvas):
-    """圆角预设行：悬停高亮、当前项浅蓝底 + 左侧圆角竖条。"""
+    """圆角预设行：悬停高亮、当前项浅蓝底 + 左侧圆角竖条 + 对比色点。"""
 
-    def __init__(self, parent, label, active, command, fn="", on_context=None):
+    def __init__(self, parent, label, active, command, fn="",
+                 on_context=None, compare_color=None):
         super().__init__(parent, bg=CARD, highlightthickness=0, bd=0,
-                         height=40, cursor="hand2")
+                         height=38, cursor="hand2")
         self.label = label
         self.active = active
         self.command = command
         self.fn = fn
         self.on_context = on_context
+        self.compare_color = compare_color
         self._hover = False
         self.bind("<Configure>", lambda e: self._draw())
         self.bind("<Enter>", self._enter)
@@ -700,26 +810,34 @@ class PresetRow(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
-        w = self.winfo_width() or 400
-        h = self.winfo_height() or 46
+        w = self.winfo_width() or 360
+        h = self.winfo_height() or 38
         fill = ACCENT_SOFT if self.active else (HOVER if self._hover else CARD)
-        rounded_rect(self, 1, 2, w - 1, h - 2, 9,
-                     fill=fill, outline=fill)
-        tx = 18
+        outline = ACCENT if self.active else fill
+        rounded_rect(self, 2, 2, w - 2, h - 2, 9,
+                     fill=fill, outline=outline)
+        right_pad = 78 if self.active else (28 if self.compare_color else 14)
+        tx = 22 if self.active else 14
+        max_chars = max(10, int((w - tx - right_pad) / 10.5))
+        text = self.label
+        if len(text) > max_chars:
+            text = text[:max_chars - 1] + "…"
         if self.active:
-            rounded_rect(self, 7, 11, 11, h - 11, 2,
+            rounded_rect(self, 8, 10, 12, h - 10, 2,
                          fill=ACCENT, outline=ACCENT)
-            tx = 24
-            self.create_text(tx, h / 2, text=self.label, anchor="w",
-                             fill=ACCENT, font=(FONT, 10, "bold"))
-            self.create_text(w - 12, h / 2, text="● 已启用", anchor="e",
-                             fill=ACCENT, font=(FONT, 8))
+            self.create_text(tx, h / 2, text=text, anchor="w",
+                             fill=ACCENT, font=(FONT, 9, "bold"))
+            self.create_text(w - 12, h / 2, text="● 生效中", anchor="e",
+                             fill=GREEN, font=(FONT, 8, "bold"))
         else:
-            self.create_text(tx, h / 2, text=self.label, anchor="w",
-                             fill=TEXT, font=(FONT, 10))
+            self.create_text(tx, h / 2, text=text, anchor="w",
+                             fill=TEXT, font=(FONT, 9))
+            if self.compare_color:
+                self.create_oval(w - 18, h / 2 - 4, w - 10, h / 2 + 4,
+                                 fill=self.compare_color, outline="")
 
 
-STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_state.json")
+STATE_PATH = os.path.join(base_dir(), "ui_state.json")
 
 
 def _recycle(path):
@@ -958,8 +1076,7 @@ def _biquad_mag(ftype, f0, gain, q, fs=48000.0):
         b0, b1, b2 = 1 + alpha * A, -2 * cw, 1 - alpha * A
         a0, a1, a2 = 1 + alpha / A, -2 * cw, 1 - alpha / A
     elif ftype in ("LS", "LSC"):
-        S = 1.0
-        beta = sw * math.sqrt(max(0.0, (A * A + 1) / S - (A - 1) ** 2))
+        beta = 2.0 * math.sqrt(A) * alpha
         b0 = A * ((A + 1) - (A - 1) * cw + beta)
         b1 = 2 * A * ((A - 1) - (A + 1) * cw)
         b2 = A * ((A + 1) - (A - 1) * cw - beta)
@@ -967,8 +1084,7 @@ def _biquad_mag(ftype, f0, gain, q, fs=48000.0):
         a1 = -2 * ((A - 1) + (A + 1) * cw)
         a2 = (A + 1) + (A - 1) * cw - beta
     elif ftype in ("HS", "HSC"):
-        S = 1.0
-        beta = sw * math.sqrt(max(0.0, (A * A + 1) / S - (A - 1) ** 2))
+        beta = 2.0 * math.sqrt(A) * alpha
         b0 = A * ((A + 1) + (A - 1) * cw + beta)
         b1 = -2 * A * ((A - 1) + (A + 1) * cw)
         b2 = A * ((A + 1) + (A - 1) * cw - beta)
@@ -1051,7 +1167,8 @@ def is_admin():
 
 
 def relaunch_as_admin():
-    params = " ".join('"%s"' % a for a in sys.argv)
+    argv = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+    params = " ".join('"%s"' % a for a in argv)
     ctypes.windll.shell32.ShellExecuteW(
         None, "runas", sys.executable, params, os.getcwd(), 1)
 
@@ -1082,24 +1199,24 @@ def list_output_devices():
                     break
                 i += 1
                 try:
-                    k = winreg.OpenKey(root, guid)
+                    with winreg.OpenKey(root, guid) as k:
+                        state = None
+                        friendly = ""
+                        desc = ""
+                        try:
+                            state = winreg.QueryValueEx(k, "DeviceState")[0]
+                        except OSError:
+                            pass
+                        try:
+                            with winreg.OpenKey(k, "Properties") as pk:
+                                friendly = winreg.QueryValueEx(
+                                    pk, "{b3f8fa53-0004-438e-9003-51a46e139bfc},6")[0]
+                                desc = winreg.QueryValueEx(
+                                    pk, "{a45c254e-df1c-4efd-8020-67d146a850e0},2")[0]
+                        except OSError:
+                            pass
                 except OSError:
                     continue
-                state = None
-                friendly = ""
-                desc = ""
-                try:
-                    state = winreg.QueryValueEx(k, "DeviceState")[0]
-                except OSError:
-                    pass
-                try:
-                    with winreg.OpenKey(k, "Properties") as pk:
-                        friendly = winreg.QueryValueEx(
-                            pk, "{b3f8fa53-0004-438e-9003-51a46e139bfc},6")[0]
-                        desc = winreg.QueryValueEx(
-                            pk, "{a45c254e-df1c-4efd-8020-67d146a850e0},2")[0]
-                except OSError:
-                    pass
                 active = bool(state is not None and (state & 1))
                 label = friendly or desc or guid
                 if friendly and desc and desc not in label:
@@ -1156,7 +1273,7 @@ class PeqEditor(tk.Toplevel):
     """内置参数均衡编辑器：拖动频点改频率/增益，滚轮改 Q，实时曲线。"""
 
     LEFT, RIGHT, TOP, BOTTOM = 46, 14, 16, 34
-    DB_RANGE = 12.0
+    DB_RANGE = 15.0
 
     def __init__(self, master, on_saved=None, app=None, initial=None,
                  target_fn=None):
@@ -1173,12 +1290,18 @@ class PeqEditor(tk.Toplevel):
         self.selected = -1
         self.preamp = 0.0
         self.drag = None
+        self._drag_snapshot = None
+        self._drag_pushed = False
         self._cursor = None
         self._undo_stack = []
         self._redo_stack = []
         if initial:
             self.preamp = float(initial.get("preamp") or 0.0)
-            self.filters = [dict(f) for f in (initial.get("filters") or [])]
+            for f in (initial.get("filters") or []):
+                item = dict(f)
+                if item.get("q") is None:
+                    item["q"] = 0.71 if item.get("type") in ("LS", "LSC", "HS", "HSC") else 1.0
+                self.filters.append(item)
             self.graphic = [tuple(g) for g in (initial.get("graphic") or [])]
         if target_fn:
             self.title("编辑预设 - %s" % NAME_MAP.get(target_fn,
@@ -1203,7 +1326,9 @@ class PeqEditor(tk.Toplevel):
             tk.Label(ctrl, text=label, bg=BG, fg=MUTED,
                      font=(FONT, 9)).pack(side="left", padx=(6, 3))
             e = tk.Entry(ctrl, textvariable=var, width=w, bg=CARD, fg=TEXT,
-                         insertbackground=TEXT, relief="flat", font=(FONT, 9))
+                         insertbackground=TEXT, relief="flat", font=(FONT, 9),
+                         highlightthickness=1, highlightbackground=BORDER,
+                         highlightcolor=ACCENT)
             e.pack(side="left", ipady=3)
             e.bind("<Return>", lambda ev: self.apply_fields())
             e.bind("<FocusOut>", lambda ev: self.apply_fields())
@@ -1212,11 +1337,12 @@ class PeqEditor(tk.Toplevel):
         field("Preamp", self.preamp_var, 7)
         tk.Label(ctrl, text=" 类型", bg=BG, fg=MUTED,
                  font=(FONT, 9)).pack(side="left", padx=(8, 3))
-        menu = tk.OptionMenu(ctrl, self.type_var, "PK", "LS", "HS",
+        menu = tk.OptionMenu(ctrl, self.type_var, "PK", "LS", "LSC", "HS", "HSC",
                              command=lambda _v: self.apply_fields())
         menu.configure(bg=CARD, fg=TEXT, activebackground=HOVER,
-                       relief="flat", highlightthickness=0,
-                       font=(FONT, 9), width=3)
+                       relief="flat", highlightthickness=1,
+                       highlightbackground=BORDER,
+                       font=(FONT, 9), width=4)
         menu["menu"].configure(bg=CARD, fg=TEXT)
         menu.pack(side="left")
 
@@ -1313,7 +1439,7 @@ class PeqEditor(tk.Toplevel):
             label = ("%gk" % (f / 1000.0)) if f >= 1000 else str(f)
             c.create_text(x, bottom + 12, text=label, fill=MUTED,
                           font=(FONT, 8), tags="gridtext")
-        for db in range(-12, 13, 3):
+        for db in range(-int(self.DB_RANGE), int(self.DB_RANGE) + 1, 3):
             y = self.g_to_y(db)
             c.create_line(left, y, right, y, fill=GRID, tags="grid")
             c.create_text(left - 18, y, text="%+d" % db, fill=MUTED,
@@ -1364,15 +1490,18 @@ class PeqEditor(tk.Toplevel):
     def update_fields(self):
         if 0 <= self.selected < len(self.filters):
             f = self.filters[self.selected]
+            q_val = f.get("q")
+            if q_val is None:
+                q_val = 0.71
+                f["q"] = q_val
             self.type_var.set(f["type"])
             self.fc_var.set("%.0f" % f["f"])
             self.gain_var.set("%.1f" % f["g"])
-            self.q_var.set("%.2f" % f["q"])
+            self.q_var.set("%.2f" % q_val)
         self.preamp_var.set("%.1f" % self.preamp)
 
     # ---------- 交互 ----------
     def on_press(self, event):
-        self._push_undo()
         best, best_d = -1, 14.0
         for i, flt in enumerate(self.filters):
             dx = self.f_to_x(flt["f"]) - event.x
@@ -1382,14 +1511,22 @@ class PeqEditor(tk.Toplevel):
                 best, best_d = i, d
         self.selected = best
         self.drag = best if best >= 0 else None
+        self._drag_snapshot = self._snapshot() if best >= 0 else None
+        self._drag_pushed = False
         self.redraw()
 
     def on_drag(self, event):
         if self.drag is None or not (0 <= self.drag < len(self.filters)):
             return
+        if not self._drag_pushed and self._drag_snapshot is not None:
+            self._undo_stack.append(self._drag_snapshot)
+            if len(self._undo_stack) > 60:
+                self._undo_stack.pop(0)
+            self._redo_stack.clear()
+            self._drag_pushed = True
         flt = self.filters[self.drag]
         flt["f"] = max(20.0, min(20000.0, self.x_to_f(event.x)))
-        flt["g"] = max(-12.0, min(12.0, self.y_to_g(event.y)))
+        flt["g"] = max(-self.DB_RANGE, min(self.DB_RANGE, self.y_to_g(event.y)))
         self.redraw()
         self._schedule_preview()
 
@@ -1398,8 +1535,9 @@ class PeqEditor(tk.Toplevel):
             return
         self._push_undo()
         flt = self.filters[self.selected]
+        q_cur = flt.get("q") or 0.71
         factor = 1.12 if event.delta > 0 else 1 / 1.12
-        flt["q"] = max(0.1, min(20.0, flt["q"] * factor))
+        flt["q"] = max(0.1, min(20.0, q_cur * factor))
         self.redraw()
         self._schedule_preview()
 
@@ -1414,7 +1552,7 @@ class PeqEditor(tk.Toplevel):
             flt["type"] = self.type_var.get() or "PK"
             try:
                 flt["f"] = max(20.0, min(20000.0, float(self.fc_var.get())))
-                flt["g"] = max(-12.0, min(12.0, float(self.gain_var.get())))
+                flt["g"] = max(-self.DB_RANGE, min(self.DB_RANGE, float(self.gain_var.get())))
                 flt["q"] = max(0.1, min(20.0, float(self.q_var.get())))
             except ValueError:
                 pass
@@ -1530,8 +1668,11 @@ class PeqEditor(tk.Toplevel):
     def _serialize(self):
         lines = ["Preamp: %.1f dB" % self.preamp]
         for i, flt in enumerate(self.filters, 1):
+            q_val = flt.get("q")
+            if q_val is None:
+                q_val = 0.71
             lines.append("Filter %d: ON %s Fc %.0f Hz Gain %.1f dB Q %.2f"
-                         % (i, flt["type"], flt["f"], flt["g"], flt["q"]))
+                         % (i, flt["type"], flt["f"], flt["g"], q_val))
         if self.graphic:
             parts = ["%g %g" % (f, g) for f, g in sorted(self.graphic)]
             lines.append("GraphicEQ: " + "; ".join(parts))
@@ -1718,7 +1859,9 @@ class OpraBrowser(tk.Toplevel):
         top = tk.Frame(self, bg=BG)
         top.pack(fill="x", padx=16, pady=(14, 8))
         self.entry = tk.Entry(top, bg=CARD, fg=TEXT, insertbackground=TEXT,
-                              relief="flat", font=(FONT, 10))
+                              relief="flat", font=(FONT, 10),
+                              highlightthickness=1, highlightbackground=BORDER,
+                              highlightcolor=ACCENT)
         self.entry.pack(side="left", fill="x", expand=True, ipady=5)
         self.entry.bind("<Return>", lambda e: self.search())
         RoundedButton(top, "搜索", self.search, kind="primary",
@@ -1726,15 +1869,16 @@ class OpraBrowser(tk.Toplevel):
         RoundedButton(top, "刷新库", self.refresh_db, kind="ghost",
                       width=76, height=32).pack(side="left", padx=(6, 0))
 
-        body = tk.Frame(self, bg=BG)
+        body = tk.Frame(self, bg=CARD, highlightthickness=1,
+                        highlightbackground=BORDER)
         body.pack(fill="both", expand=True, padx=16)
         self.listbox = tk.Listbox(body, bg=CARD, fg=TEXT, selectbackground=ACCENT,
                                   selectforeground="#ffffff", relief="flat",
-                                  highlightthickness=0, font=(FONT, 10),
+                                  highlightthickness=0, bd=0, font=(FONT, 10),
                                   activestyle="none")
-        self.listbox.pack(side="left", fill="both", expand=True)
-        scroll = tk.Scrollbar(body, command=self.listbox.yview)
-        scroll.pack(side="left", fill="y")
+        self.listbox.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
+        scroll = SlimScrollbar(body, self.listbox.yview, width=10)
+        scroll.pack(side="right", fill="y", pady=2)
         self.listbox.configure(yscrollcommand=scroll.set)
         self.listbox.bind("<<ListboxSelect>>", lambda e: self.show_detail())
         self.listbox.bind("<Double-Button-1>", lambda e: self.import_selected())
@@ -2060,38 +2204,49 @@ class App:
         root = parent
 
         header = tk.Frame(root, bg=BG)
-        header.pack(fill="x", padx=20, pady=(18, 6))
+        header.pack(fill="x", padx=20, pady=(16, 10))
         left = tk.Frame(header, bg=BG)
-        left.pack(side="left")
-        tk.Label(left, text="EQ 切换器", bg=BG, fg=TEXT,
-                 font=(FONT, 22, "bold")).pack(anchor="w")
-        tk.Label(left, text="Equalizer APO 预设切换 · FiiO K11",
-                 bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(3, 0))
+        left.pack(side="left", fill="x", expand=True)
+        title_row = tk.Frame(left, bg=BG)
+        title_row.pack(anchor="w")
+        tk.Label(title_row, text="EQ 切换器", bg=BG, fg=TEXT,
+                 font=(FONT, 18, "bold")).pack(side="left")
+        tk.Label(title_row, text=APP_VERSION, bg=ACCENT_SOFT, fg=ACCENT,
+                 font=(FONT, 8, "bold"), padx=6, pady=1).pack(
+                     side="left", padx=(8, 0), pady=(4, 0))
+        self.subtitle_lbl = tk.Label(
+            left, text="Equalizer APO 预设实时切换",
+            bg=BG, fg=MUTED, font=(FONT, 9))
+        self.subtitle_lbl.pack(anchor="w", pady=(2, 0))
+
         right = tk.Frame(header, bg=BG)
-        right.pack(side="right", anchor="n")
-        tk.Label(right, text=APP_VERSION, bg=BG, fg=MUTED,
-                 font=(FONT, 8)).pack(anchor="e")
-        self.mode = tk.Label(right, text="管理员" if self.admin else "普通模式",
+        right.pack(side="right", anchor="center")
+        self.mode = tk.Label(right, text="● 管理员" if self.admin else "● 只读模式",
                              bg=GREEN if self.admin else ORANGE_SOFT,
                              fg="#ffffff" if self.admin else ORANGE,
-                             font=(FONT, 8), padx=8, pady=2)
-        self.mode.pack(anchor="e", pady=(4, 0))
-        self.pin = PinButton(right, value=self.pinned, command=self._toggle_pin)
-        self.pin.pack(anchor="e", pady=(4, 0))
+                             font=(FONT, 8, "bold"), padx=9, pady=4)
+        self.mode.pack(side="left", padx=(0, 8))
+        self.pin = PinButton(right, value=self.pinned, command=self._toggle_pin,
+                             width=70, height=28)
+        self.pin.pack(side="left", padx=(0, 8))
         self.theme_switch = ThemeSwitch(right, value=self.dark,
-                                        command=self._toggle_theme)
-        self.theme_switch.pack(anchor="e", pady=(4, 0))
+                                        command=self._toggle_theme,
+                                        width=78, height=28)
+        self.theme_switch.pack(side="left")
 
         body = tk.Frame(root, bg=BG)
-        body.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        body.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+        body.columnconfigure(0, weight=46, uniform="col")
+        body.columnconfigure(1, weight=54, uniform="col")
+        body.rowconfigure(0, weight=1)
         leftcol = tk.Frame(body, bg=BG)
-        leftcol.pack(side="left", fill="both", expand=True)
+        leftcol.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
         rightcol = tk.Frame(body, bg=BG)
-        rightcol.pack(side="left", fill="both", expand=True, padx=(14, 0))
+        rightcol.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
 
         devsel = tk.Frame(leftcol, bg=BG)
         devsel.pack(fill="x", pady=(0, 10))
-        tk.Label(devsel, text="作用设备", bg=BG, fg=MUTED,
+        tk.Label(devsel, text="输出设备", bg=BG, fg=MUTED,
                  font=(FONT, 9)).pack(side="left")
         self.devices = list_output_devices()
         self._device_map = {label: pattern for _a, label, pattern, _g in self.devices}
@@ -2099,25 +2254,47 @@ class App:
         self._device_labels_active = [label for a, label, _p, _g in self.devices if a]
         self.show_offline = tk.BooleanVar(value=False)
         opts = ["全部设备（不限定）"] + self._device_labels_active
-        self.device_combo = DeviceSelector(devsel, opts, width=262)
-        self.device_combo.pack(side="left", padx=(8, 0))
+        self.device_combo = DeviceSelector(devsel, opts, width=210, height=32)
+        self.device_combo.pack(side="left", fill="x", expand=True, padx=(8, 8))
         self.device_combo.on_change = self._on_device
         self.offline_chip = ToggleChip(devsel, "含未连接",
                                        value=self.show_offline.get(),
                                        command=self._toggle_offline,
-                                       width=86, height=32)
-        self.offline_chip.pack(side="left", padx=(8, 0))
+                                       width=76, height=32)
+        self.offline_chip.pack(side="right")
         self.device_combo.set_options(opts)
         _dev, _inc = read_config_state()
         self._select_device_from_config(_dev)
 
         self.list_card = Card(leftcol)
         self.list_card.pack(fill="both", expand=True)
+        # 常驻搜索栏（不随 build 重建，避免打字丢焦点与中文输入法中断）
+        self._search_box = tk.Frame(
+            self.list_card.body, bg=HOVER, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=ACCENT)
+        self._search_box.pack(fill="x", padx=4, pady=(2, 8))
+        tk.Label(self._search_box, text="⌕", bg=HOVER, fg=MUTED,
+                 font=(FONT, 10)).pack(side="left", padx=(8, 4))
+        self._placeholder = "搜索预设名称或文件名…"
+        self._showing_ph = True
+        self._filter_entry = tk.Entry(
+            self._search_box, bg=HOVER, fg=MUTED, insertbackground=TEXT,
+            relief="flat", bd=0, font=(FONT, 9))
+        self._filter_entry.pack(side="left", fill="x", expand=True, ipady=5)
+        self._filter_entry.insert(0, self._placeholder)
+        self._filter_entry.bind("<FocusIn>", self._on_search_focus_in)
+        self._filter_entry.bind("<FocusOut>", self._on_search_focus_out)
+        self._filter_entry.bind("<KeyRelease>", self._on_search_key)
+        self._filter_entry.bind("<Escape>", lambda e: self._clear_search())
+        self._clear_btn = tk.Label(self._search_box, text="✕", bg=HOVER,
+                                   fg=MUTED, font=(FONT, 8), padx=8,
+                                   cursor="hand2")
+        self._clear_btn.bind("<Button-1>", lambda e: self._clear_search())
+
         holder = tk.Frame(self.list_card.body, bg=CARD)
         holder.pack(fill="both", expand=True)
         self.list_canvas = tk.Canvas(holder, bg=CARD, highlightthickness=0, bd=0)
-        self._list_vsb = tk.Scrollbar(holder, orient="vertical",
-                                      command=self.list_canvas.yview)
+        self._list_vsb = SlimScrollbar(holder, self.list_canvas.yview, width=10)
         self.list_canvas.configure(yscrollcommand=self._on_list_scroll)
         self.list_canvas.pack(side="left", fill="both", expand=True)
         self.frame = tk.Frame(self.list_canvas, bg=CARD)
@@ -2135,54 +2312,74 @@ class App:
         self.analysis_card = Card(rightcol)
         self.analysis_card.pack(fill="both", expand=True)
         ab = self.analysis_card.body
-        tk.Label(ab, text="分析面板", bg=CARD, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w", padx=10, pady=(0, 4))
+        ahdr = tk.Frame(ab, bg=CARD)
+        ahdr.pack(fill="x", padx=6, pady=(2, 6))
+        tk.Label(ahdr, text="频响分析", bg=CARD, fg=TEXT,
+                 font=(FONT, 10, "bold")).pack(side="left")
+        self.analysis_badge = tk.Label(ahdr, text="", bg=ACCENT_SOFT, fg=ACCENT,
+                                       font=(FONT, 8), padx=7, pady=2)
+        self.analysis_badge.pack(side="left", padx=(8, 0))
+        self.clear_cmp_lbl = tk.Label(ahdr, text="清空对比", bg=CARD, fg=MUTED,
+                                      font=(FONT, 8), cursor="hand2")
+        self.clear_cmp_lbl.bind("<Button-1>", lambda e: self._clear_compare())
+
+        self._graph_cursor = None
         self.graph = tk.Canvas(ab, bg=CARD, highlightthickness=0, bd=0,
-                               height=320)
-        self.graph.pack(fill="both", expand=True, padx=6)
+                               height=310)
+        self.graph.pack(fill="both", expand=True, padx=2)
         self.graph.bind("<Configure>", lambda e: self._draw_analysis())
+        self.graph.bind("<Motion>", self._on_graph_motion)
+        self.graph.bind("<Leave>", self._on_graph_leave)
+
         stats = tk.Frame(ab, bg=CARD)
-        stats.pack(fill="x", padx=10, pady=(6, 2))
-        self.stat_peak = tk.Label(stats, text="峰值增益  —", bg=CARD, fg=TEXT,
-                                  font=(FONT, 9), anchor="w")
-        self.stat_peak.pack(anchor="w")
-        self.stat_filters = tk.Label(stats, text="滤波器  —", bg=CARD, fg=MUTED,
-                                     font=(FONT, 9), anchor="w")
-        self.stat_filters.pack(anchor="w")
-        self.stat_preamp = tk.Label(stats, text="预增益  —", bg=CARD, fg=MUTED,
-                                    font=(FONT, 9), anchor="w")
-        self.stat_preamp.pack(anchor="w")
+        stats.pack(fill="x", padx=4, pady=(10, 2))
+        for col in range(3):
+            stats.columnconfigure(col, weight=1, uniform="stat")
+
+        def make_stat(col, title):
+            box = tk.Frame(stats, bg=HOVER, highlightthickness=1,
+                           highlightbackground=BORDER)
+            box.grid(row=0, column=col, sticky="nsew",
+                     padx=(0 if col == 0 else 4, 0 if col == 2 else 4))
+            tk.Label(box, text=title, bg=HOVER, fg=MUTED,
+                     font=(FONT, 8), anchor="w").pack(fill="x", padx=10, pady=(6, 1))
+            val = tk.Label(box, text="—", bg=HOVER, fg=TEXT,
+                           font=(FONT, 11, "bold"), anchor="w")
+            val.pack(fill="x", padx=10, pady=(0, 6))
+            return val
+
+        self.stat_peak = make_stat(0, "峰值增益")
+        self.stat_filters = make_stat(1, "滤波器")
+        self.stat_preamp = make_stat(2, "预增益")
 
         self.banner = tk.Label(root, text="", bg=BG, fg=ORANGE,
-                               font=(FONT, 9), wraplength=430, justify="left")
-        self.banner.pack(fill="x", padx=22)
+                               font=(FONT, 9), anchor="w", justify="left")
+        self.banner.pack(fill="x", padx=22, pady=(0, 2))
 
         bottom = tk.Frame(root, bg=BG)
-        bottom.pack(fill="x", padx=20, pady=(4, 8))
+        bottom.pack(fill="x", padx=20, pady=(4, 6))
         self.volume_toggle = ToggleChip(
             bottom, "音量匹配", value=self.volume_match,
-            command=self._toggle_volume_match, width=88)
+            command=self._toggle_volume_match, width=84, height=34)
         self.volume_toggle.pack(side="left", padx=(0, 8))
         RoundedButton(bottom, "PEQ 编辑器", self.open_peq, kind="ghost",
-                      width=104).pack(side="left", padx=(0, 8))
+                      width=102, height=34).pack(side="left", padx=(0, 8))
         RoundedButton(bottom, "耳机库", self.open_opra, kind="ghost",
-                      width=96).pack(side="left")
-        RoundedButton(bottom, "添加预设", self.add_presets, kind="ghost",
-                      width=96).pack(side="left", padx=8)
-        RoundedButton(bottom, "刷新列表", self.build, kind="ghost",
-                      width=96).pack(side="left", padx=8)
-        self.pack_btn = RoundedButton(bottom, "预设包", self._open_pack_menu,
-                                      kind="ghost", width=88)
-        self.pack_btn.pack(side="left")
-        RoundedButton(bottom, "关闭 EQ", self.bypass, kind="danger",
-                      width=96).pack(side="left")
+                      width=84, height=34).pack(side="left", padx=(0, 8))
+        self.manage_btn = RoundedButton(bottom, "预设管理 ▾",
+                                        self._open_manage_menu,
+                                        kind="ghost", width=102, height=34)
+        self.manage_btn.pack(side="left", padx=(0, 8))
         if not self.admin:
             RoundedButton(bottom, "以管理员重启", relaunch_as_admin,
-                          kind="primary", width=128).pack(side="right")
+                          kind="primary", width=120, height=34).pack(
+                              side="right", padx=(8, 0))
+        RoundedButton(bottom, "关闭 EQ", self.bypass, kind="danger",
+                      width=88, height=34).pack(side="right")
 
         self.status = tk.Label(root, text="", bg=BG, fg=MUTED,
                                font=(FONT, 9), anchor="w")
-        self.status.pack(fill="x", padx=22, pady=(0, 14))
+        self.status.pack(fill="x", padx=22, pady=(2, 12))
 
         self.build()
         self._theme_roles = None
@@ -2211,11 +2408,33 @@ class App:
         self.ui_state["theme"] = "dark" if dark else "light"
         save_ui_state(self.ui_state)
         self.dark = dark
+        target = DARK if dark else LIGHT
+        set_palette_values(dict(target))
+        try:
+            self.root.configure(bg=BG)
+        except Exception:
+            pass
         set_dark_titlebar(self.root, dark)
         for w in self.root.winfo_children():
             if isinstance(w, tk.Toplevel):
                 set_dark_titlebar(w, dark)
-        self._animate_theme(DARK if dark else LIGHT)
+        self._apply_palette_to_widgets(target)
+        self._redraw_all_canvases()
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel) and hasattr(w, "theme_frame"):
+                try:
+                    w.theme_frame()
+                except Exception:
+                    pass
+        try:
+            if self._showing_ph:
+                self._filter_entry.configure(fg=MUTED)
+            else:
+                self._filter_entry.configure(fg=TEXT)
+        except Exception:
+            pass
+        self._update_status()
+        self._update_analysis()
 
     def _collect_theme_targets(self):
         opts = ("background", "foreground", "activebackground",
@@ -2296,6 +2515,13 @@ class App:
                         child._draw()
                     except Exception:
                         pass
+                if isinstance(child, Card):
+                    try:
+                        child.configure(bg=BG)
+                        child.canvas.configure(bg=BG)
+                        child._redraw()
+                    except Exception:
+                        pass
                 if isinstance(child, tk.Canvas):
                     drawable = hasattr(child, "_draw") or hasattr(child, "_redraw")
                     if drawable:
@@ -2313,12 +2539,6 @@ class App:
                 walk(child)
 
         walk(self.root)
-        for card in getattr(self, "_theme_cards", []):
-            try:
-                card.canvas.configure(bg=BG)
-                card._redraw()
-            except Exception:
-                pass
         try:
             self.graph.configure(bg=CARD)
             self._draw_analysis()
@@ -2526,17 +2746,55 @@ class App:
                                 "已添加 %d 个，跳过 %d 个。\n\n目录：%s"
                                 % (added, skipped, EQ_DIR))
 
+    def _search_query(self):
+        if getattr(self, "_showing_ph", False) or not self._filter_entry:
+            return ""
+        return self._filter_entry.get().strip().lower()
+
+    def _on_search_focus_in(self, _e=None):
+        if self._showing_ph:
+            self._showing_ph = False
+            self._filter_entry.delete(0, "end")
+            self._filter_entry.configure(fg=TEXT)
+        self._search_box.configure(highlightbackground=ACCENT)
+
+    def _on_search_focus_out(self, _e=None):
+        self._search_box.configure(highlightbackground=BORDER)
+        if not self._filter_entry.get().strip():
+            self._showing_ph = True
+            self._filter_entry.delete(0, "end")
+            self._filter_entry.insert(0, self._placeholder)
+            self._filter_entry.configure(fg=MUTED)
+            self._clear_btn.pack_forget()
+
+    def _on_search_key(self, _e=None):
+        if self._showing_ph:
+            return
+        if self._filter_entry.get():
+            self._clear_btn.pack(side="right")
+        else:
+            self._clear_btn.pack_forget()
+        self._on_filter_changed()
+
+    def _clear_search(self):
+        self._showing_ph = False
+        self._filter_entry.delete(0, "end")
+        self._filter_entry.configure(fg=TEXT)
+        self._clear_btn.pack_forget()
+        self.list_canvas.yview_moveto(0.0)
+        self.build()
+
     def _on_filter_changed(self, *_args):
         if self._filter_job:
             try:
                 self.root.after_cancel(self._filter_job)
             except Exception:
                 pass
-        self._filter_job = self.root.after(160, self._rebuild_filtered)
+        self._filter_job = self.root.after(140, self._rebuild_filtered)
 
     def _rebuild_filtered(self):
         self._filter_job = None
-        self._keep_filter_focus = True
+        self.list_canvas.yview_moveto(0.0)
         self.build()
 
     def _check_updates_async(self):
@@ -2588,24 +2846,41 @@ class App:
         except Exception:
             pass
 
-    def _open_pack_menu(self):
+    def _open_manage_menu(self):
         top = tk.Toplevel(self.root)
         top.overrideredirect(True)
         top.configure(bg=BORDER)
         frame = tk.Frame(top, bg=CARD)
         frame.pack(padx=1, pady=1, fill="both", expand=True)
 
+        def safe_close(_e=None):
+            try:
+                if top.winfo_exists():
+                    top.destroy()
+            except tk.TclError:
+                pass
+
         def choose(action):
-            top.destroy()
+            safe_close()
             action()
 
+        def open_folder():
+            try:
+                os.makedirs(EQ_DIR, exist_ok=True)
+                os.startfile(EQ_DIR)
+            except Exception as exc:
+                messagebox.showerror("打开目录失败", str(exc))
+
         items = (
-            ("导出预设包…", self.export_pack),
-            ("导入预设包…", self.import_pack),
+            ("添加本地预设…", self.add_presets),
+            ("导入预设包 (.zip)…", self.import_pack),
+            ("导出预设包 (.zip)…", self.export_pack),
+            ("刷新预设列表", self.build),
+            ("打开预设目录", open_folder),
         )
         for text, action in items:
             lbl = tk.Label(frame, text=text, anchor="w", bg=CARD, fg=TEXT,
-                           font=(FONT, 9), padx=14, pady=6, cursor="hand2")
+                           font=(FONT, 9), padx=14, pady=7, cursor="hand2")
             lbl.pack(fill="x")
             lbl.bind("<Enter>", lambda e, l=lbl: l.configure(
                 bg=ACCENT_SOFT, fg=ACCENT))
@@ -2613,15 +2888,15 @@ class App:
                 bg=CARD, fg=TEXT))
             lbl.bind("<Button-1>", lambda e, a=action: choose(a))
         top.update_idletasks()
-        x = self.pack_btn.winfo_rootx()
-        y = self.pack_btn.winfo_rooty() - top.winfo_reqheight() - 4
+        x = self.manage_btn.winfo_rootx()
+        y = self.manage_btn.winfo_rooty() - top.winfo_reqheight() - 4
         top.attributes("-topmost", True)
         top.geometry("+%d+%d" % (x, y))
         top.update()
         top.lift()
         top.focus_force()
-        top.bind("<FocusOut>", lambda e: top.destroy())
-        top.bind("<Escape>", lambda e: top.destroy())
+        top.bind("<FocusOut>", safe_close)
+        top.bind("<Escape>", safe_close)
 
     def export_pack(self):
         path = filedialog.asksaveasfilename(
@@ -2687,6 +2962,11 @@ class App:
         self.volume_match = bool(self.volume_toggle.get())
         self.ui_state["volume_match"] = self.volume_match
         save_ui_state(self.ui_state)
+        active = self.read_active()
+        if active and self.admin:
+            self.apply(active)
+        else:
+            self._update_analysis()
 
     def open_peq(self):
         PeqEditor(self.root, on_saved=self.build, app=self)
@@ -2737,8 +3017,15 @@ class App:
         frame = tk.Frame(top, bg=CARD)
         frame.pack(padx=1, pady=1, fill="both", expand=True)
 
+        def safe_close(_e=None):
+            try:
+                if top.winfo_exists():
+                    top.destroy()
+            except tk.TclError:
+                pass
+
         def choose(action):
-            top.destroy()
+            safe_close()
             action()
 
         favorites = set(self.ui_state.get("favorites", []))
@@ -2780,8 +3067,8 @@ class App:
         top.update()
         top.lift()
         top.focus_force()
-        top.bind("<FocusOut>", lambda e: top.destroy())
-        top.bind("<Escape>", lambda e: top.destroy())
+        top.bind("<FocusOut>", safe_close)
+        top.bind("<Escape>", safe_close)
 
     def edit_preset(self, fn):
         path = os.path.join(EQ_DIR, fn)
@@ -2888,58 +3175,132 @@ class App:
                 break
             parent = getattr(parent, "master", None)
         if inside:
-            self.list_canvas.yview_scroll(int(-event.delta / 120), "units")
+            first, last = self.list_canvas.yview()
+            if first <= 0.0 and last >= 1.0:
+                return
+            steps = -1 if event.delta > 0 else 1
+            if abs(event.delta) >= 240:
+                steps *= max(1, abs(event.delta) // 120)
+            self.list_canvas.yview_scroll(steps, "units")
+
+    def _on_graph_motion(self, event):
+        self._graph_cursor = (event.x, event.y)
+        self._draw_graph_cursor()
+
+    def _on_graph_leave(self, _e=None):
+        self._graph_cursor = None
+        if self.graph is not None:
+            self.graph.delete("acursor")
+
+    def _graph_bounds(self):
+        c = self.graph
+        w = c.winfo_width() or 380
+        h = c.winfo_height() or 300
+        left, right, top, bottom = 36, 12, 12, 22
+        return w, h, left, top, max(60, w - left - right), max(60, h - top - bottom)
+
+    def _calc_db_range(self):
+        all_dbs = []
+        curve = getattr(self, "_curve", None)
+        if curve:
+            all_dbs.extend(curve[1])
+        for _lbl, _cf, cdbs in getattr(self, "_compare_curves", [])[:3]:
+            all_dbs.extend(cdbs)
+        if not all_dbs:
+            return -15, 15, 3
+        lo_v, hi_v = min(all_dbs), max(all_dbs)
+        peak = max(abs(lo_v), abs(hi_v))
+        if peak <= 13.5:
+            return -15, 15, 3
+        if peak <= 22.0:
+            return -25, 25, 5
+        return -60, 40, 10
+
+    def _draw_graph_cursor(self):
+        c = self.graph
+        if c is None:
+            return
+        c.delete("acursor")
+        if not self._graph_cursor:
+            return
+        w, h, left, top, plotw, ploth = self._graph_bounds()
+        x, y = self._graph_cursor
+        if not (left <= x <= left + plotw and top <= y <= top + ploth):
+            return
+        db_min, db_max, _step = getattr(self, "_db_range", (-15, 15, 3))
+        ratio_x = (x - left) / max(1, plotw)
+        freq = 20.0 * (1000.0 ** max(0.0, min(1.0, ratio_x)))
+        db = db_max - (y - top) / max(1, ploth) * (db_max - db_min)
+        curve = getattr(self, "_curve", None)
+        if curve and curve[0]:
+            idx = min(range(len(curve[0])), key=lambda i: abs(curve[0][i] - freq))
+            db = curve[1][idx]
+            y = top + (db_max - max(db_min, min(db_max, db))) / (db_max - db_min) * ploth
+            c.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5,
+                          fill=ACCENT, outline=CARD, width=1.5, tags="acursor")
+        c.create_line(x, top, x, top + ploth, fill=AXIS, dash=(2, 4), tags="acursor")
+        f_txt = ("%.2f kHz" % (freq / 1000.0)) if freq >= 1000.0 else ("%.0f Hz" % freq)
+        txt = "%s  %+.1f dB" % (f_txt, db)
+        tx = x + 8 if x < left + plotw - 115 else x - 8
+        anchor = "nw" if x < left + plotw - 115 else "ne"
+        c.create_text(tx, top + 6, text=txt, anchor=anchor, fill=TEXT,
+                      font=(FONT, 8, "bold"), tags="acursor")
 
     def _draw_analysis(self):
         c = self.graph
         if c is None:
             return
         c.delete("all")
-        w = c.winfo_width() or 360
-        h = c.winfo_height() or 300
+        w, h, left, top, plotw, ploth = self._graph_bounds()
         c.create_rectangle(0, 0, w, h, fill=CARD, outline="", tags="abg")
-        left, right, top, bottom = 6, 26, 8, 18
-        plotw = max(60, w - left - right)
-        ploth = max(60, h - top - bottom)
+        db_min, db_max, db_step = self._calc_db_range()
+        self._db_range = (db_min, db_max, db_step)
         lo, hi = 20.0, 20000.0
 
         def x_of(f):
             return left + (math.log10(f) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * plotw
 
         def y_of(db):
-            return top + (40 - db) / 100.0 * ploth
+            return top + (db_max - db) / float(db_max - db_min) * ploth
 
-        for db in range(-60, 41, 10):
+        c.create_rectangle(left, top, left + plotw, top + ploth,
+                           outline=BORDER, tags="agrid")
+        for db in range(db_min, db_max + 1, db_step):
             yy = y_of(db)
             c.create_line(left, yy, left + plotw, yy, fill=GRID, tags="agrid")
-            c.create_text(left + plotw + 3, yy, text=str(db), anchor="w",
+            lbl = ("%+d" % db) if db > 0 else str(db)
+            c.create_text(left - 5, yy, text=lbl, anchor="e",
                           fill=MUTED, font=(FONT, 7), tags="agrid")
         for f in (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000):
             xx = x_of(f)
             c.create_line(xx, top, xx, top + ploth, fill=GRID, tags="agrid")
             label = ("%dk" % (f // 1000)) if f >= 1000 else str(f)
-            c.create_text(xx, top + ploth + 2, text=label, anchor="n",
+            c.create_text(xx, top + ploth + 4, text=label, anchor="n",
                           fill=MUTED, font=(FONT, 7), tags="agrid")
-        c.create_line(left, y_of(0), left + plotw, y_of(0), fill=AXIS, tags="aaxis")
+        c.create_line(left, y_of(0), left + plotw, y_of(0),
+                      fill=AXIS, width=1.2, tags="aaxis")
         for idx, (label, cfreqs, cdbs) in enumerate(
                 getattr(self, "_compare_curves", [])[:3]):
             color = COMPARE_COLORS[idx % len(COMPARE_COLORS)]
             pts = []
             for f, db in zip(cfreqs, cdbs):
-                pts.extend([x_of(f), y_of(max(-60, min(40, db)))])
-            c.create_line(*pts, fill=color, width=1.5, tags="acompare")
-            ly = top + 10 + idx * 13
-            c.create_line(left + 6, ly, left + 18, ly, fill=color, width=2,
+                pts.extend([x_of(f), y_of(max(db_min, min(db_max, db)))])
+            if len(pts) >= 4:
+                c.create_line(*pts, fill=color, width=1.6, dash=(4, 2), tags="acompare")
+            ly = top + 12 + idx * 15
+            c.create_line(left + 8, ly, left + 22, ly, fill=color, width=2,
                           tags="acompare")
-            c.create_text(left + 22, ly, text=label, anchor="w", fill=MUTED,
-                          font=(FONT, 7), tags="acompare")
+            c.create_text(left + 26, ly, text=label, anchor="w", fill=MUTED,
+                          font=(FONT, 8), tags="acompare")
         curve = getattr(self, "_curve", None)
         if curve:
             freqs, dbs = curve
             pts = []
             for f, db in zip(freqs, dbs):
-                pts.extend([x_of(f), y_of(max(-60, min(40, db)))])
-            c.create_line(*pts, fill=ACCENT, width=2, tags="acurve")
+                pts.extend([x_of(f), y_of(max(db_min, min(db_max, db)))])
+            if len(pts) >= 4:
+                c.create_line(*pts, fill=ACCENT, width=2.2, smooth=True, tags="acurve")
+        self._draw_graph_cursor()
 
     def _update_analysis(self):
         include = self.read_active()
@@ -2951,19 +3312,32 @@ class App:
                 preamp, filters, graphic = parse_preset(path)
             else:
                 preamp, filters, graphic = 0.0, [], []
-            freqs, dbs = response_curve(preamp, filters, graphic)
+            comp = 0.0
+            if getattr(self, "volume_match", False):
+                comp = estimate_compensation(preamp, filters, graphic)
+            eff_preamp = preamp + (comp if abs(comp) >= 0.1 else 0.0)
+            freqs, dbs = response_curve(eff_preamp, filters, graphic)
             self._curve = (freqs, dbs)
             peak = max(dbs) if dbs else 0.0
-            self.stat_peak.configure(text="峰值增益  %+.1f dB" % peak,
-                                     fg=RED if peak > 0 else TEXT)
-            self.stat_filters.configure(text="滤波器  %d 个" % len(filters))
-            self.stat_preamp.configure(text="预增益  %+.1f dB" % preamp)
+            self.stat_peak.configure(text="%+.1f dB" % peak,
+                                     fg=RED if peak > 0.05 else GREEN)
+            flt_txt = "%d 段" % len(filters)
+            if graphic:
+                flt_txt += " + GEQ"
+            self.stat_filters.configure(text=flt_txt, fg=TEXT)
+            pre_txt = "%+.1f dB" % eff_preamp
+            self.stat_preamp.configure(text=pre_txt, fg=TEXT)
+            badge = NAME_MAP.get(include, include)
+            if len(badge) > 22:
+                badge = badge[:21] + "…"
+            self.analysis_badge.configure(text=badge, bg=ACCENT_SOFT, fg=ACCENT)
         else:
             freqs, dbs = response_curve(0.0, [])
             self._curve = (freqs, dbs)
-            self.stat_peak.configure(text="峰值增益  —", fg=TEXT)
-            self.stat_filters.configure(text="滤波器  —")
-            self.stat_preamp.configure(text="预增益  —")
+            self.stat_peak.configure(text="—", fg=MUTED)
+            self.stat_filters.configure(text="—", fg=MUTED)
+            self.stat_preamp.configure(text="—", fg=MUTED)
+            self.analysis_badge.configure(text="已旁路", bg=HOVER, fg=MUTED)
         self._compare_curves = []
         for fn in self.ui_state.get("compare", [])[:3]:
             if fn == include:
@@ -2977,6 +3351,10 @@ class App:
             except Exception:
                 continue
             self._compare_curves.append((NAME_MAP.get(fn, fn), cfreqs, cdbs))
+        if self._compare_curves:
+            self.clear_cmp_lbl.pack(side="right")
+        else:
+            self.clear_cmp_lbl.pack_forget()
         self._draw_analysis()
 
     def build(self):
@@ -2993,36 +3371,28 @@ class App:
 
         if not self.admin:
             self.banner.configure(
-                text="当前为普通模式：只能查看，不能切换。点右下角「以管理员重启」。")
+                text="⚠ 当前为只读模式（仅可查看与分析），点击右下角「以管理员重启」即可切换预设。")
         else:
             self.banner.configure(text="")
 
-        search = tk.Frame(self.frame, bg=CARD)
-        search.pack(fill="x", padx=8, pady=(0, 6))
-        self._filter_entry = tk.Entry(
-            search, textvariable=self.filter_var, bg=HOVER, fg=TEXT,
-            insertbackground=TEXT, relief="flat", font=(FONT, 9),
-            highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=ACCENT)
-        self._filter_entry.pack(fill="x", ipady=4)
-        self._filter_entry.bind("<Escape>", lambda e: self.filter_var.set(""))
-
-        tk.Label(self.frame, text="预设", bg=CARD, fg=MUTED,
-                 font=(FONT, 8, "bold")).pack(anchor="w", padx=10, pady=(0, 6))
-        query = self.filter_var.get().strip().lower()
+        query = self._search_query()
         tokens = [x for x in query.split() if x]
         if tokens:
             def _match(fn):
                 text = (NAME_MAP.get(fn, fn) + " " + fn).lower()
                 return all(tok in text for tok in tokens)
             presets = [fn for fn in presets if _match(fn)]
+        compare_list = [fn for fn in self.ui_state.get("compare", [])[:3]
+                        if fn != active]
+        compare_map = {fn: COMPARE_COLORS[i % len(COMPARE_COLORS)]
+                       for i, fn in enumerate(compare_list)}
         if not presets and tokens:
             tk.Label(self.frame, text="没有匹配「%s」的预设" % query,
                      bg=CARD, fg=MUTED, font=(FONT, 9)).pack(
-                anchor="w", padx=4, pady=4)
+                anchor="w", padx=10, pady=12)
         elif not presets:
             tk.Label(self.frame, text="%s 下没有找到预设文件" % EQ_DIR,
-                     bg=CARD, fg=RED, font=(FONT, 10)).pack(anchor="w", padx=4)
+                     bg=CARD, fg=RED, font=(FONT, 10)).pack(anchor="w", padx=10, pady=12)
         else:
             favorites = set(self.ui_state.get("favorites", []))
             groups = {}
@@ -3042,28 +3412,21 @@ class App:
                 expanded = gname not in collapsed
                 GroupHeader(self.frame, gname, len(items), expanded,
                             lambda gg=gname: self._toggle_group(gg)).pack(
-                                fill="x", pady=(6, 0))
+                                fill="x", pady=(6, 2))
                 if expanded:
                     for fn in items:
                         label = ("★ " if fn in favorites else "") + NAME_MAP.get(fn, fn)
                         PresetRow(self.frame, label, active == fn,
                                   lambda f=fn: self.apply(f), fn=fn,
-                                  on_context=self._preset_menu).pack(
-                                      fill="x", padx=14, pady=1)
+                                  on_context=self._preset_menu,
+                                  compare_color=compare_map.get(fn)).pack(
+                                      fill="x", padx=6, pady=1)
             if hidden:
-                tk.Label(self.frame, text="已隐藏 %d 个 · 点此恢复" % len(hidden),
-                         bg=CARD, fg=MUTED, font=(FONT, 8),
-                         cursor="hand2").pack(anchor="w", padx=12, pady=(8, 2))
-                self.frame.winfo_children()[-1].bind(
-                    "<Button-1>", lambda e: self._restore_hidden())
-
-        if getattr(self, "_keep_filter_focus", False) and self._filter_entry:
-            try:
-                self._filter_entry.focus_set()
-                self._filter_entry.icursor("end")
-            except Exception:
-                pass
-            self._keep_filter_focus = False
+                lbl = tk.Label(self.frame, text="已隐藏 %d 个预设 · 点击恢复" % len(hidden),
+                               bg=CARD, fg=MUTED, font=(FONT, 8),
+                               cursor="hand2")
+                lbl.pack(anchor="w", padx=12, pady=(10, 4))
+                lbl.bind("<Button-1>", lambda e: self._restore_hidden())
 
         self._update_status()
         self._update_analysis()
@@ -3071,14 +3434,20 @@ class App:
     def _update_status(self):
         active = self.read_active()
         dev_label = self.device_combo.get()
+        dev_short = "全部输出设备" if dev_label.startswith("全部") else dev_label
+        if hasattr(self, "subtitle_lbl"):
+            self.subtitle_lbl.configure(
+                text="Equalizer APO 预设切换 · %s" % dev_short)
         dev_suffix = "" if dev_label.startswith("全部") else "  ·  " + dev_label
         if active:
             self.status.configure(
-                text="当前生效：%s%s" % (NAME_MAP.get(active, active), dev_suffix),
+                text="● 当前生效：%s%s   （右键预设可收藏 / 编辑 / 曲线对比）"
+                % (NAME_MAP.get(active, active), dev_suffix),
                 fg=ACCENT)
         else:
             self.status.configure(
-                text="当前生效：EQ 已关闭（bypass）" + dev_suffix, fg=MUTED)
+                text="○ 当前状态：EQ 已关闭（bypass）%s   （点击左侧预设启用，右键可编辑或对比）"
+                % dev_suffix, fg=MUTED)
 
     def _backup_config(self):
         if not os.path.exists(CFG):
